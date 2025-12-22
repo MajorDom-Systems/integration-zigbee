@@ -1,5 +1,5 @@
 from abstract_controller import AbstractController
 
 
-class ZigbeeController(AbstractController):
+class ZigBeeController(AbstractController):
     pass

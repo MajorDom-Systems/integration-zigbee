@@ -3,7 +3,7 @@ from uuid import UUID
 from majordom_hub.schemas.device import Device, Parameter
 
 class ZBDeviceIntegrationData():
-    pass
+    ieee: str
 
 
 class ZBDevice(Device):

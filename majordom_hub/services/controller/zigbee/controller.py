@@ -5,6 +5,7 @@ from typing import Type, override
 
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
+from .mapper import ZigBeeMapper
 from .model import ZBDevice, ZBParameter
 
 
@@ -13,6 +14,8 @@ class ZigBeeController(AbstractController):
     _zigbe_db: str
     _application: ControllerApplication
     _majordom_discoveries: dict
+
+    _mapper = ZigBeeMapper()
 
 
     @property
@@ -47,8 +50,20 @@ class ZigBeeController(AbstractController):
         if self._application:
             await self._application.shutdown()
 
-    async def identify(self, device):
-        pass
+    async def identify(self, device: ZBDevice):
+        if not self._application:
+            raise ValueError()
 
-    async def pair_device(self):
-        pass
+        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
+
+        if not (zdevice := self._application.devices.get(ieee)):
+            raise ValueError()
+        if not zdevice.is_initialized:
+            raise ValueError()
+
+        for endpoint_id, endpoint in zdevice.endpoints.items():
+            if endpoint_id == 0:  # zdo endpoint
+                continue
+
+            if hasattr(endpoint, "identify"):
+                await endpoint.identify.identify(10)  # 10 - identification time

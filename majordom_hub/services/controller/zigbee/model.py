@@ -1,13 +1,38 @@
 from uuid import UUID
+from pydantic import BaseModel
+from enum import Enum
 
-from majordom_hub.schemas.device import Device, Parameter
+from majordom_hub.schemas.device import Device, DeviceState, Parameter, ParameterState
 
-class ZBDeviceIntegrationData():
+
+class ZBParameterType(str, Enum):
+    attribute = "attribute"
+    command = "command"
+
+
+class ZBDeviceIntegrationData(BaseModel):
     ieee: str
+
+
+class ZBParameterIntegrationData(BaseModel):
+    endpoint_id: int
+    cluster_id: int
+    attribute_id: int | None = None
+    command_id: int | None = None
+    type: ZBParameterType
 
 
 class ZBDevice(Device):
     integration_data: ZBDeviceIntegrationData
 
+
 class ZBParameter(Parameter):
-    pass
+    integration_data: ZBParameterIntegrationData
+
+
+class ZBParameterState(ParameterState):
+    integration_data: ZBParameterIntegrationData
+
+
+class ZBDeviceState(ZBDevice, DeviceState):
+    parameters: list[ZBParameterState]

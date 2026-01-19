@@ -1,0 +1,49 @@
+import asyncio
+
+from uuid import UUID
+from zigpy.device import Device
+from zigpy.zcl import Cluster
+
+from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
+from majordom_hub.schemas.device import CredentialsType, Discovery, NonEmptyStr
+
+
+class ZigBeeListener:
+    def __init__(self, controller, device_id: UUID | None = None, cluster: Cluster | None = None):
+        self._controller = controller
+        self._device_id = device_id
+        self._cluster = cluster
+
+    def attribute_updated(self, attribute_id, value):
+        cluster = self._cluster
+        endpoint_id = cluster.endpoint.endpoint_id
+        parameter_id = self._controller._mapper.create_uuid_id(f"attribute_{endpoint_id}/{cluster.cluster_id}/{attribute_id}")
+        event = DeviceParameterChangedEvent(
+            device_id=self._device_id,
+            parameter_id=parameter_id,
+            value=value
+        )
+
+        asyncio.create_task(self._controller.dependencies.output.controller_did_receive_device_events(self._controller, [event]))
+
+    def device_initialized(self, device: Device):
+        discovery_id = self._controller._mapper.create_uuid_id(str(device.ieee))
+        if discovery_id in self._controller.discoveries():
+            self._controller._subscribe(discovery_id, device)
+            return
+        discovery = Discovery(
+            id=discovery_id,
+            integration=NonEmptyStr(self._controller.name()),
+            credentials=CredentialsType.none,
+            expiration=None,
+            transport=NonEmptyStr("ZIGBEE"),
+            device_manufacturer=None,
+            device_name=NonEmptyStr(device.name),
+            device_category=None,
+            device_icon=None
+        )
+
+        self._controller._majordom_discovery[discovery_id] = discovery
+        self._controller._connected_device[discovery_id] = device
+
+        asyncio.create_task(self._controller.dependencies.output.controller_did_receive_discovery(self._controller, discovery))

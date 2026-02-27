@@ -14,7 +14,7 @@ class ZigBeeListener:
         self._device_id = device_id
         self._cluster = cluster
 
-    def attribute_updated(self, attribute_id, value):
+    def attribute_updated(self, attribute_id, value, time):
         cluster = self._cluster
         endpoint_id = cluster.endpoint.endpoint_id
         parameter_id = self._controller._mapper.create_uuid_id(f"attribute_{endpoint_id}/{cluster.cluster_id}/{attribute_id}")
@@ -44,6 +44,7 @@ class ZigBeeListener:
         )
 
         self._controller._majordom_discovery[discovery_id] = discovery
-        self._controller._connected_device[discovery_id] = device
+        self._controller._connected_devices[discovery_id] = device
 
         asyncio.create_task(self._controller.dependencies.output.controller_did_receive_discovery(self._controller, discovery))
+        asyncio.create_task(self._controller._remove_discovery(discovery_id, device.ieee))

@@ -28,7 +28,7 @@ class ZigBeeListener:
 
     def device_initialized(self, device: Device):
         discovery_id = self._controller._mapper.create_uuid_id(str(device.ieee))
-        if discovery_id in self._controller.discoveries():
+        if discovery_id in self._controller.discoveries.keys():
             self._controller._subscribe(discovery_id, device)
             return
         discovery = Discovery(

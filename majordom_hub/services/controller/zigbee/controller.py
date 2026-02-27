@@ -46,6 +46,8 @@ class ZigBeeController(AbstractController):
         return ZBParameter
 
     async def start(self):
+        self._zigbee_device_path = "/dev/ttyACM0"
+        self._zigbe_db = "/home/zigbee/zigbee.db"
         config = {
             CONF_DEVICE: {
                 CONF_DEVICE_PATH: self._zigbee_device_path
@@ -56,6 +58,8 @@ class ZigBeeController(AbstractController):
         listener = ZigBeeListener(self)
         self._application.add_listener(listener)
         for device in self._application.devices.values():
+            if device.nwk == 0x0000:
+                continue
             if device.is_initialized:
                 listener.device_initialized(device)
 

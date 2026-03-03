@@ -5,6 +5,7 @@ from typing import Type, override
 from zigpy.config import CONF_DEVICE, CONF_DEVICE_PATH, CONF_DATABASE
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.zcl.clusters.general import Identify
+from zigpy.zcl.foundation import ZCLAttributeAccess
 from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
@@ -57,11 +58,11 @@ class ZigBeeController(AbstractController):
         self._application = await ControllerApplication.new(config=config, auto_form=True)
         listener = ZigBeeListener(self)
         self._application.add_listener(listener)
-        for device in self._application.devices.values():
-            if device.nwk == 0x0000:
-                continue
-            if device.is_initialized:
-                listener.device_initialized(device)
+        for device_id, zbdevice in self._connected_devices.items():
+            async with self.dependencies.make_device_repository() as device_repo:
+                if not device_repo.get(device_id, ZBDevice):
+                    continue
+            await self._subscribe(device_id, zbdevice)
 
     async def stop(self):
         if self._application:
@@ -86,7 +87,12 @@ class ZigBeeController(AbstractController):
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
                 for attribute_id in cluster.attributes.keys():
-                    value = await cluster.read_attributes([attribute_id])
+                    values, failures = await cluster.read_attributes([attribute_id])
+                    if failures:
+                        value = None
+                        print(failures)
+                    else:
+                        value = values.get(attribute_id)
                     events.append(DeviceParameterChangedEvent(
                         device_id=device.id,
                         parameter_id=self._mapper.create_uuid_id(f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
@@ -128,16 +134,18 @@ class ZigBeeController(AbstractController):
             raise ValueError()
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
             raise ValueError()
-        cluster = zbdevice.find_cluster(parameter.integration_data.cluster_id)
+        # cluster = zbdevice.find_cluster(parameter.integration_data.cluster_id)
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
                 raise ValueError()
-            await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
+            print(parameter.name, command.value)
+            r = await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
+            print(r)
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
                 raise ValueError()
-            await cluster.command(zbcommand.id, command.value)
+            await cluster.command(zbcommand.id, command.value) if command.value else await cluster.command(zbcommand.id)
 
     async def pair_device(self, discovery: Discovery, credentials):
         async with self.dependencies.make_device_repository() as device_repository:
@@ -147,13 +155,20 @@ class ZigBeeController(AbstractController):
             assert device
             assert zbdevice
 
-            if not device.integration_data:
-                device.integration_data = ZBDeviceIntegrationData(ieee=str(zbdevice.ieee))
+            if not device.integration_data.ieee:
+                device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
             parameters: list[ZBParameterState] = list()
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
                     for attribute_id, attribute in cluster.attributes.items():
-                        value = await cluster.read_attributes([attribute_id])
+                        value = None
+                        if attribute.access & ZCLAttributeAccess.Read:
+                            values, failures = await cluster.read_attributes([attribute.id])
+                            if failures:
+                                print(failures)
+                            else:
+                                value = values.get(attribute.id)
+                        print(value)
                         parameters.append(ZBParameterState(
                             id=self._mapper.create_uuid_id(f"attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
                             name=attribute.name,
@@ -165,14 +180,14 @@ class ZigBeeController(AbstractController):
                                 attribute_id=attribute_id,
                                 type=ZBParameterType.attribute,
                             ),
-                        value=bytes(value),
+                            value=b'',
                         ))
                     for command in cluster.commands:
                         parameters.append(ZBParameterState(
                             id=self._mapper.create_uuid_id(f"command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
                             name=command.name,
                             data_type=ParameterDataType.none,
-                            role=ParameterRole.event,
+                            role=ParameterRole.control,
                             integration_data=ZBParameterIntegrationData(
                                 endpoint_id=endpoint.endpoint_id,
                                 cluster_id=cluster.cluster_id,
@@ -199,5 +214,7 @@ class ZigBeeController(AbstractController):
 
     async def _remove_discovery(self, discovery_id, ieee):
         await asyncio.sleep(300)  # 5 minutes
+        if discovery_id not in self._majordom_discoveries:
+            return
         await self._application.remove(ieee)
         self.discoveries.pop(discovery_id)

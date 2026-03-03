@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from enum import Enum
 
 from majordom_hub.schemas.device import Device, DeviceState, Parameter, ParameterState
+from majordom_hub.schemas.base import Base
 
 
 class ZBParameterType(str, Enum):
@@ -10,8 +11,8 @@ class ZBParameterType(str, Enum):
     command = "command"
 
 
-class ZBDeviceIntegrationData(BaseModel):
-    ieee: str
+class ZBDeviceIntegrationData(Base):
+    ieee: str | None = None
 
 
 class ZBParameterIntegrationData(BaseModel):

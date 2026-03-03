@@ -33,7 +33,7 @@ class ZigBeeListener:
             return
         discovery = Discovery(
             id=discovery_id,
-            integration=NonEmptyStr(self._controller.name()),
+            integration=NonEmptyStr(self._controller.name),
             credentials=CredentialsType.none,
             expiration=None,
             transport=NonEmptyStr("ZIGBEE"),
@@ -43,7 +43,7 @@ class ZigBeeListener:
             device_icon=None
         )
 
-        self._controller._majordom_discovery[discovery_id] = discovery
+        self._controller._majordom_discoveries[discovery_id] = discovery
         self._controller._connected_devices[discovery_id] = device
 
         asyncio.create_task(self._controller.dependencies.output.controller_did_receive_discovery(self._controller, discovery))

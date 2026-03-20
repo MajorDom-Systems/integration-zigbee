@@ -1,3 +1,6 @@
+import zigpy.types as t
+
+from enum import Flag, Enum
 from uuid import UUID, NAMESPACE_DNS, uuid5
 from zigpy.types import EUI64
 from zigpy.zcl.foundation import ZCLAttributeAccess, DataType, DataTypeId
@@ -24,27 +27,34 @@ class ZigBeeMapper:
 
         return ParameterRole.event
 
-    def parse_zigbee_data_type(self, zcl_type: int) -> ParameterDataType:
-        try:
-            type_id = DataTypeId(zcl_type)
-        except ValueError:
+    def parse_zigbee_data_type(self, zcl_type: int | type) -> ParameterDataType:
+        if isinstance(zcl_type, type):
+            if issubclass(zcl_type, t.Bool):
+                zcl_type = DataTypeId.bool_
+            elif issubclass(zcl_type, Flag):
+                zcl_type = DataTypeId.map8
+            elif issubclass(zcl_type, Enum):
+                zcl_type = DataTypeId.enum8
+            elif issubclass(zcl_type, t.FixedIntType):
+                zcl_type = DataTypeId.uint8
+            elif issubclass(zcl_type, float):
+                zcl_type = DataTypeId.single
+            else:
+                zcl_type = DataTypeId.nodata
+
+        type_id = DataTypeId(zcl_type)
+
+        if type_id in {DataTypeId.unk, DataTypeId.nodata}:
             return ParameterDataType.none
-    
-        data_type = next((dt for dt in DataType if dt.type_id == type_id), None)
-        if data_type is None:
-            return ParameterDataType.none
-    
-        if data_type.type_id in (DataTypeId.unk, DataTypeId.nodata):
-            return ParameterDataType.none
-        if data_type.type_id == DataTypeId.bool_:
+        if type_id == DataType.bool_:
             return ParameterDataType.bool
-        if data_type.type_id in (DataTypeId.enum8, DataTypeId.enum16):
+        if type_id in {DataTypeId.enum8, DataTypeId.enum16}:
             return ParameterDataType.enum
-        if data_type.type_id in (DataTypeId.string, DataTypeId.string16):
+        if type_id in {DataTypeId.string, DataTypeId.string16}:
             return ParameterDataType.string
-        if data_type.type_id in (DataTypeId.semi, DataTypeId.single, DataTypeId.double):
+        if type_id in {DataTypeId.semi, DataTypeId.single, DataTypeId.double}:
             return ParameterDataType.decimal
-        if data_type.type_id in (
+        if type_id in {
             DataTypeId.uint8, DataTypeId.uint16, DataTypeId.uint24, DataTypeId.uint32,
             DataTypeId.uint40, DataTypeId.uint48, DataTypeId.uint56, DataTypeId.uint64,
             DataTypeId.int8, DataTypeId.int16, DataTypeId.int24, DataTypeId.int32,
@@ -53,32 +63,18 @@ class ZigBeeMapper:
             DataTypeId.map40, DataTypeId.map48, DataTypeId.map56, DataTypeId.map64,
             DataTypeId.ToD, DataTypeId.date, DataTypeId.UTC,
             DataTypeId.clusterId, DataTypeId.attribId, DataTypeId.bacOID,
-        ):
+        }:
             return ParameterDataType.integer
-        if data_type.type_id in (
+        if type_id in {
             DataTypeId.data8, DataTypeId.data16, DataTypeId.data24, DataTypeId.data32,
             DataTypeId.data40, DataTypeId.data48, DataTypeId.data56, DataTypeId.data64,
             DataTypeId.octstr, DataTypeId.octstr16,
             DataTypeId.array, DataTypeId.struct, DataTypeId.set, DataTypeId.bag,
             DataTypeId.EUI64, DataTypeId.key128,
-        ):
+        }:
             return ParameterDataType.data
     
         return ParameterDataType.none
-
-    def parse_zigbee_data_type_value_to_bytes(self, value, data_type: ParameterDataType) -> bytes:
-        if data_type == ParameterDataType.none:
-            return bytes()
-        if data_type == ParameterDataType.bool:
-            return bytes((int(value),))
-        if data_type in (ParameterDataType.integer, ParameterDataType.decimal):
-            return value.to_bytes()
-        if data_type == ParameterDataType.string:
-            return bytes(value, 'utf-8')
-        if data_type == ParameterDataType.enum:
-            return bytes()
-        if data_type == ParameterDataType.data:
-            return bytes()
 
     def create_uuid_id(self, id: str) -> UUID:
         return uuid5(NAMESPACE_DNS, id)

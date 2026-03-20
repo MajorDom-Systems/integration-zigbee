@@ -1,5 +1,7 @@
 import asyncio
+import json
 
+from enum import Enum
 from uuid import UUID
 from typing import Type, override
 from zigpy.config import CONF_DEVICE, CONF_DEVICE_PATH, CONF_DATABASE
@@ -10,12 +12,22 @@ from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.device import  Discovery
-from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType
+from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 from .mapper import ZigBeeMapper
-from .model import ZBDevice, ZBDeviceIntegrationData, ZBDeviceState, ZBParameter, ZBParameterIntegrationData, ZBParameterState, ZBParameterType
+from .model import (
+    Parameter,
+    ZBDevice,
+    ZBDeviceIntegrationData,
+    ZBDeviceState,
+    ZBParameter,
+    ZBParameterIntegrationData,
+    ZBParameterState,
+    ZBParameterType
+)
 from .listener import ZigBeeListener
+from .zigbee_spec import SYSTEM_CLUSTERS, get_unit, get_min_step
 
 
 class ZigBeeController(AbstractController):
@@ -160,19 +172,53 @@ class ZigBeeController(AbstractController):
             parameters: list[ZBParameterState] = list()
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
+                    if cluster.cluster_id in SYSTEM_CLUSTERS:  # skip system clusters
+                        continue
                     for attribute_id, attribute in cluster.attributes.items():
-                        value = None
+                        value = b''
+                        
+                        visibility = ParameterVisibility.system
+                        if attribute_id < 0xF000:  # next manufacturer specifik and global/system attributes
+                            if attribute.access & ZCLAttributeAccess.Report:
+                                visibility = ParameterVisibility.user
+                            elif attribute.access & ZCLAttributeAccess.Write:
+                                visibility = ParameterVisibility.setting
+                        
                         if attribute.access & ZCLAttributeAccess.Read:
-                            values, failures = await cluster.read_attributes([attribute.id])
+                            values, failures = await cluster.read_attributes([attribute_id])
                             if failures:
                                 print(failures)
                             else:
-                                value = values.get(attribute.id)
-                        print(value)
+                                temp = values.get(attribute_id)
+                                if temp is not None:
+                                    value = attribute.type(temp).serialize()
+
+
+                        data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
+                        min_value = None
+                        max_value = None
+                        valid_values = None
+                        min_step = get_min_step(cluster.cluster_id, attribute_id)
+                        unit = get_unit(cluster.cluster_id, attribute_id)
+
+                        if hasattr(attribute.type, "min_value"):
+                            min_value = attribute.type.min_value
+                        if hasattr(attribute.type, "max_value"):
+                            max_value = attribute.type.max_value
+
+                        if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
+                            valid_values = {member.name: str(member.value) for member in attribute.type}
+
                         parameters.append(ZBParameterState(
                             id=self._mapper.create_uuid_id(f"attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
                             name=attribute.name,
-                            data_type=self._mapper.parse_zigbee_data_type(attribute.zcl_type),
+                            data_type=data_type,
+                            visibility=visibility,
+                            min_value=min_value,
+                            max_value=max_value,
+                            min_step=min_step,
+                            unit=unit,
+                            valid_values=valid_values,
                             role=self._mapper.parse_zigbee_attribute_access(attribute.access),
                             integration_data=ZBParameterIntegrationData(
                                 endpoint_id=endpoint.endpoint_id,
@@ -180,14 +226,42 @@ class ZigBeeController(AbstractController):
                                 attribute_id=attribute_id,
                                 type=ZBParameterType.attribute,
                             ),
-                            value=b'',
+                            value=value,
                         ))
                     for command in cluster.commands:
+                        fields: list[Parameter] = []
+                        for i, field in enumerate(command.schema.fields):
+                            min_value = None
+                            max_value = None
+                            valid_values = None
+
+                            if hasattr(field.type, "min_value"):
+                                min_value = field.type.min_value
+                            if hasattr(field.type, "max_value"):
+                                max_value = field.type.max_value
+                            if isinstance(field.type, type) and issubclass(field.type, Enum):
+                                valid_values = {member.name: str(member.value) for member in field.type}
+                            
+                            fields.append(Parameter(
+                                id=self._mapper.create_uuid_id(
+                                    f"field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"
+                                ),
+                                name=field.name,
+                                data_type=self._mapper.parse_zigbee_data_type(field.type),
+                                role=ParameterRole.control,
+                                visibility=ParameterVisibility.setting,
+                                min_value=min_value,
+                                max_value=max_value,
+                                valid_values=valid_values,
+                                integration_data=None,
+                            ))
                         parameters.append(ZBParameterState(
                             id=self._mapper.create_uuid_id(f"command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
                             name=command.name,
                             data_type=ParameterDataType.none,
                             role=ParameterRole.control,
+                            fields=json.loads(json.dumps([f.model_dump(mode='json') for f in fields])) if fields else None,
+                            visibility=ParameterVisibility.setting,
                             integration_data=ZBParameterIntegrationData(
                                 endpoint_id=endpoint.endpoint_id,
                                 cluster_id=cluster.cluster_id,
@@ -217,4 +291,6 @@ class ZigBeeController(AbstractController):
         if discovery_id not in self._majordom_discoveries:
             return
         await self._application.remove(ieee)
-        self.discoveries.pop(discovery_id)
+        self._majordom_discoveries.pop(discovery_id)
+        self._connected_devices.pop(discovery_id)
+        

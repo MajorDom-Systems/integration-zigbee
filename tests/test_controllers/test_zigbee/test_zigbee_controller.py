@@ -6,22 +6,27 @@ from starlette.websockets import WebSocketDisconnect
 
 @pytest.mark.asyncio
 async def test_discovery_paired(async_client, crud, get_user_bearer):
+    # TODO: fully pair a device XD
     user = await crud.create_user()
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200, r.json() == []
+    assert r.status_code == 200 and r.json() == [], f'Sth is wrong, {r.json()}'
 
 
 @pytest.mark.asyncio
 async def test_discovery_unpaired(async_client, crud, get_user_bearer):
+    # test_device_name?
     user = await crud.create_user()
     await async_client.post("v1/api/device/open_network?time=30", headers=get_user_bearer(user.id))
     await asyncio.sleep(30)
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200, r.json() != {}
+    assert r.status_code == 200, r.json() != {} # test_device_name in here?
+    # TODO: fix assert syntax
 
 
 @pytest.mark.asyncio
 async def test_pair(async_client, crud, get_user_bearer):
+    # is device expecting to be paired? is theere a discovery after open_network?
+    
     user = await crud.create_user()
     room = await crud.create_room()
 
@@ -36,11 +41,11 @@ async def test_pair(async_client, crud, get_user_bearer):
     }
 
     r = await async_client.post("/v1/api/device", json=data, headers=get_user_bearer(user.id))
-    assert r.status_code == 200, r.json()
+    assert r.status_code == 200, r.json() # NOTE: that prints r.json if assert fails; it doesn't check the json contents!
 
 
 @pytest.mark.asyncio
-async def test_controll_command(crud, async_client_ws_connect, async_client, get_user_bearer):
+async def test_control_command(crud, async_client_ws_connect, async_client, get_user_bearer):
     user = await crud.create_user()
     command = {
         'type': 'device_command',
@@ -53,14 +58,14 @@ async def test_controll_command(crud, async_client_ws_connect, async_client, get
     message = None
     try:
         async with async_client_ws_connect(user.id) as ws:
-            while True:
-                await ws.send_json(command)
-                async with asyncio.timeout(1):
+            await ws.send_json(command) # should this be out of the loop?
+            async with asyncio.timeout(1):
+                while True:
                     message = await ws.receive_json()
-                if message['type'] == 'majordom_did_connect_device':
-                    continue
-                else:
-                    break
+                    if message['type'] == 'majordom_did_connect_device':
+                        continue
+                    else:
+                        break
     except WebSocketDisconnect as e:
         assert e.code == 1000
     assert message and message.get('type') == 'majordom_did_receive_event', message
@@ -80,25 +85,26 @@ async def test_controll_attribute(crud, async_client_ws_connect, async_client, g
     message = None
     try:
         async with async_client_ws_connect(user.id) as ws:
-            while True:
-                await ws.send_json(command)
-                async with asyncio.timeout(1):
+            await ws.send_json(command)
+            async with asyncio.timeout(1):
+                while True:
                     message = await ws.receive_json()
-                if message['type'] == 'majordom_did_connect_device':
-                    continue
-                else:
-                    break
+                    if message['type'] == 'majordom_did_connect_device':
+                        continue
+                    else:
+                        break
     except WebSocketDisconnect as e:
         assert e.code == 1000
     assert message and message.get('type') == 'majordom_did_receive_event', message
 
 @pytest.mark.asyncio
 async def test_events():
-    pass
+    raise NotImplementedError() # TODO: test that when an attribute is updated, the correct event is sent to majordom
 
 
 @pytest.mark.asyncio
 async def test_unpair(async_client, crud, get_user_bearer):
+    # where is `c17efe96-b199-5a9c-ae42-321121dfbe25` from?
     user = await crud.create_user()
     r = await async_client.delete("/v1/api/device/c17efe96-b199-5a9c-ae42-321121dfbe25", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()

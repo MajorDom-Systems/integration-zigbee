@@ -1,20 +1,21 @@
 import asyncio
 import json
-
 from enum import Enum
-from uuid import UUID
 from typing import Type, override
-from zigpy.config import CONF_DEVICE, CONF_DEVICE_PATH, CONF_DATABASE
+from uuid import UUID
+
+from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import ZCLAttributeAccess
 from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
-from majordom_hub.schemas.device import  Discovery
-from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType, ParameterVisibility
+from majordom_hub.schemas.device import Discovery
+from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
+from .listener import ZigBeeDeviceListener
 from .mapper import ZigBeeMapper
 from .model import (
     Parameter,
@@ -24,21 +25,20 @@ from .model import (
     ZBParameter,
     ZBParameterIntegrationData,
     ZBParameterState,
-    ZBParameterType
+    ZBParameterType,
 )
-from .listener import ZigBeeListener
-from .zigbee_spec import SYSTEM_CLUSTERS, get_unit, get_min_step
+from .zigbee_spec import SYSTEM_CLUSTERS, get_min_step, get_unit
 
 
 class ZigBeeController(AbstractController):
     _zigbee_device_path: str
     _zigbe_db: str
     # _application: ControllerApplication
-    _majordom_discoveries: dict[UUID, Discovery] = dict()
-    _connected_devices: dict[UUID, ZPDevice] = dict()
+    _majordom_discoveries: dict[UUID, Discovery] = dict() # MJ discovery metadata
+    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = dict() # connected to zigbee network but not set up in majordom yet
+    _connected_devices: dict[UUID, ZPDevice] = dict() # fully connected
 
     _mapper = ZigBeeMapper()
-
 
     @property
     def name(self) -> str:
@@ -59,31 +59,34 @@ class ZigBeeController(AbstractController):
         return ZBParameter
 
     async def start(self):
-        self._zigbee_device_path = "/dev/ttyACM0"
-        self._zigbe_db = "/home/zigbee/zigbee.db"
-        config = {
-            CONF_DEVICE: {
-                CONF_DEVICE_PATH: self._zigbee_device_path
-            },
-            CONF_DATABASE: self._zigbe_db
-        }
+        self._zigbee_device_path = "/dev/ttyACM0"  # TODO: integration config and/or declaration of used devices
+        self._zigbe_db = "/home/zigbee/zigbee.db"  # TODO: integration data folder
+        config = {CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path}, CONF_DATABASE: self._zigbe_db}
+        # Starting zigbee stack
         self._application = await ControllerApplication.new(config=config, auto_form=True)
-        listener = ZigBeeListener(self)
+        listener = ZigBeeDeviceListener(self)
         self._application.add_listener(listener)
-        for device_id, zbdevice in self._connected_devices.items():
-            async with self.dependencies.make_device_repository() as device_repo:
+        
+        # Application loads db, loads all paired devies, and calls listener.device_initialized for each, which populates _connected_devices?
+        # TODO: make sure it's sync; load our db as a fallback
+        
+        async with self.dependencies.make_device_repository() as device_repo:
+            for device_id, zbdevice in self._connected_devices.items():
                 if not device_repo.get(device_id, ZBDevice):
                     continue
-            await self._subscribe(device_id, zbdevice)
+                await self._subscribe(device_id, zbdevice)
 
     async def stop(self):
+        # TODO:
+            # 1. check the zigbee db disconnect error
+            # 2. clean _connected_devices and discoveries
         if self._application:
             await self._application.shutdown()
 
-    async def open_network(self, secs: int) -> None:
+    async def open_network(self, seconds: int) -> None:
         if not self._application:
             raise ValueError()
-        await self._application.permit(secs)
+        await self._application.permit(seconds)
 
     async def fetch(self, device: ZBDevice) -> None:
         if not self._application:
@@ -105,17 +108,21 @@ class ZigBeeController(AbstractController):
                         print(failures)
                     else:
                         value = values.get(attribute_id)
-                    events.append(DeviceParameterChangedEvent(
-                        device_id=device.id,
-                        parameter_id=self._mapper.create_uuid_id(f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
-                        value=value
-                    ))
+                    events.append(
+                        DeviceParameterChangedEvent(
+                            device_id=device.id,
+                            parameter_id=self._mapper.create_uuid_id(f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
+                            value=value,
+                        )
+                    )
                 for command_id in cluster.commands.keys():
-                    events.append(DeviceParameterChangedEvent(
-                        device_id=device.id,
-                        parameter_id=self._mapper.create_uuid_id(f"command_{endpoint_id}/{cluster_id}/{command_id}"),
-                        value=None
-                    ))
+                    events.append(
+                        DeviceParameterChangedEvent(
+                            device_id=device.id,
+                            parameter_id=self._mapper.create_uuid_id(f"command_{endpoint_id}/{cluster_id}/{command_id}"),
+                            value=None,
+                        )
+                    )
 
         await self.dependencies.output.controller_did_receive_device_events(self, events)
 
@@ -136,21 +143,21 @@ class ZigBeeController(AbstractController):
                 continue
             await cluster.identify(10)  # 10 - identification time
 
-    async def send_command(self, command,  device: ZBDevice, parameter: ZBParameter):
+    async def send_command(self, command, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
-            raise ValueError()
+            raise ValueError() # TODO: raise IntegrationError.integration_not_started
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
         if not (zbdevice := self._application.devices.get(ieee)):
-            raise ValueError()
+            raise ValueError() # TODO: raise IntegrationError.device_not_found
         if not (endpoint := zbdevice.endpoints.get(parameter.integration_data.endpoint_id)):
-            raise ValueError()
+            raise ValueError() # TODO: raise IntegrationError.internal_error
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
             raise ValueError()
         # cluster = zbdevice.find_cluster(parameter.integration_data.cluster_id)
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
                 raise ValueError()
-            print(parameter.name, command.value)
+            print(parameter.name, command.value) # TODO: logger.debug or nothing
             r = await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
             print(r)
         else:
@@ -162,8 +169,10 @@ class ZigBeeController(AbstractController):
     async def pair_device(self, discovery: Discovery, credentials):
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
-            zbdevice = self._connected_devices.get(discovery.id)
             self._majordom_discoveries.pop(discovery.id)
+            zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
+            self._connected_devices[discovery.id] = zbdevice
+            
             assert device
             assert zbdevice
 
@@ -175,24 +184,24 @@ class ZigBeeController(AbstractController):
                     if cluster.cluster_id in SYSTEM_CLUSTERS:  # skip system clusters
                         continue
                     for attribute_id, attribute in cluster.attributes.items():
-                        value = b''
-                        
+                        value = b""
+
                         visibility = ParameterVisibility.system
                         if attribute_id < 0xF000:  # next manufacturer specifik and global/system attributes
                             if attribute.access & ZCLAttributeAccess.Report:
                                 visibility = ParameterVisibility.user
                             elif attribute.access & ZCLAttributeAccess.Write:
                                 visibility = ParameterVisibility.setting
-                        
+
                         if attribute.access & ZCLAttributeAccess.Read:
                             values, failures = await cluster.read_attributes([attribute_id])
                             if failures:
                                 print(failures)
+                                # TODO: logger.error
                             else:
                                 temp = values.get(attribute_id)
                                 if temp is not None:
                                     value = attribute.type(temp).serialize()
-
 
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
                         min_value = None
@@ -209,25 +218,27 @@ class ZigBeeController(AbstractController):
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
                             valid_values = {member.name: str(member.value) for member in attribute.type}
 
-                        parameters.append(ZBParameterState(
-                            id=self._mapper.create_uuid_id(f"attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
-                            name=attribute.name,
-                            data_type=data_type,
-                            visibility=visibility,
-                            min_value=min_value,
-                            max_value=max_value,
-                            min_step=min_step,
-                            unit=unit,
-                            valid_values=valid_values,
-                            role=self._mapper.parse_zigbee_attribute_access(attribute.access),
-                            integration_data=ZBParameterIntegrationData(
-                                endpoint_id=endpoint.endpoint_id,
-                                cluster_id=cluster.cluster_id,
-                                attribute_id=attribute_id,
-                                type=ZBParameterType.attribute,
-                            ),
-                            value=value,
-                        ))
+                        parameters.append(
+                            ZBParameterState(
+                                id=self._mapper.create_uuid_id(f"attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
+                                name=attribute.name,
+                                data_type=data_type,
+                                visibility=visibility,
+                                min_value=min_value,
+                                max_value=max_value,
+                                min_step=min_step,
+                                unit=unit,
+                                valid_values=valid_values,
+                                role=self._mapper.parse_zigbee_attribute_access(attribute.access),
+                                integration_data=ZBParameterIntegrationData(
+                                    endpoint_id=endpoint.endpoint_id,
+                                    cluster_id=cluster.cluster_id,
+                                    attribute_id=attribute_id,
+                                    type=ZBParameterType.attribute,
+                                ),
+                                value=value,
+                            )
+                        )
                     for command in cluster.commands:
                         fields: list[Parameter] = []
                         for i, field in enumerate(command.schema.fields):
@@ -241,35 +252,37 @@ class ZigBeeController(AbstractController):
                                 max_value = field.type.max_value
                             if isinstance(field.type, type) and issubclass(field.type, Enum):
                                 valid_values = {member.name: str(member.value) for member in field.type}
-                            
-                            fields.append(Parameter(
-                                id=self._mapper.create_uuid_id(
-                                    f"field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"
-                                ),
-                                name=field.name,
-                                data_type=self._mapper.parse_zigbee_data_type(field.type),
+
+                            fields.append(
+                                Parameter(
+                                    id=self._mapper.create_uuid_id(f"field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"),
+                                    name=field.name,
+                                    data_type=self._mapper.parse_zigbee_data_type(field.type),
+                                    role=ParameterRole.control,
+                                    visibility=ParameterVisibility.setting,
+                                    min_value=min_value,
+                                    max_value=max_value,
+                                    valid_values=valid_values,
+                                    integration_data=None,
+                                )
+                            )
+                        parameters.append(
+                            ZBParameterState(
+                                id=self._mapper.create_uuid_id(f"command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
+                                name=command.name,
+                                data_type=ParameterDataType.none,
                                 role=ParameterRole.control,
+                                fields=json.loads(json.dumps([f.model_dump(mode="json") for f in fields])) if fields else None,
                                 visibility=ParameterVisibility.setting,
-                                min_value=min_value,
-                                max_value=max_value,
-                                valid_values=valid_values,
-                                integration_data=None,
-                            ))
-                        parameters.append(ZBParameterState(
-                            id=self._mapper.create_uuid_id(f"command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
-                            name=command.name,
-                            data_type=ParameterDataType.none,
-                            role=ParameterRole.control,
-                            fields=json.loads(json.dumps([f.model_dump(mode='json') for f in fields])) if fields else None,
-                            visibility=ParameterVisibility.setting,
-                            integration_data=ZBParameterIntegrationData(
-                                endpoint_id=endpoint.endpoint_id,
-                                cluster_id=cluster.cluster_id,
-                                command_id=command.id,
-                                type=ZBParameterType.command,
-                            ),
-                            value=b''
-                        ))
+                                integration_data=ZBParameterIntegrationData(
+                                    endpoint_id=endpoint.endpoint_id,
+                                    cluster_id=cluster.cluster_id,
+                                    command_id=command.id,
+                                    type=ZBParameterType.command,
+                                ),
+                                value=b"",
+                            )
+                        )
             device.parameters = parameters
             await device_repository.save(device, discovery.id)
             await self.dependencies.output.controller_did_connect_device(self, discovery.id)
@@ -280,17 +293,22 @@ class ZigBeeController(AbstractController):
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.create_uuid_id(device.integration_data.ieee))
 
+    # ZigBee Listener:
+
+
+    # Private:
+
     async def _subscribe(self, device_id, device: ZPDevice):
-        for endpoint in device.non_zdo_endpoints:    
+        for endpoint in device.non_zdo_endpoints:
             for cluster in endpoint.in_clusters.values():
-                listener = ZigBeeListener(self, device_id, cluster)
+                listener = ZigBeeDeviceListener(self, device_id, cluster)
                 cluster.add_listener(listener)
 
-    async def _remove_discovery(self, discovery_id, ieee):
+    async def _disconnect_unpaired_discovery(self, discovery_id, ieee):
         await asyncio.sleep(300)  # 5 minutes
         if discovery_id not in self._majordom_discoveries:
+            # if was connected
             return
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)
-        self._connected_devices.pop(discovery_id)
-        
+        self._awaiting_zb_discoveries.pop(discovery_id)

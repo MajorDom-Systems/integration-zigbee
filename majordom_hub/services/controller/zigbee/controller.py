@@ -34,9 +34,9 @@ class ZigBeeController(AbstractController):
     _zigbee_device_path: str
     _zigbe_db: str
     # _application: ControllerApplication
-    _majordom_discoveries: dict[UUID, Discovery] = dict() # MJ discovery metadata
-    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = dict() # connected to zigbee network but not set up in majordom yet
-    _connected_devices: dict[UUID, ZPDevice] = dict() # fully connected
+    _majordom_discoveries: dict[UUID, Discovery] = dict()  # MJ discovery metadata
+    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = dict()  # connected to zigbee network but not set up in majordom yet
+    _connected_devices: dict[UUID, ZPDevice] = dict()  # fully connected
 
     _mapper = ZigBeeMapper()
 
@@ -59,17 +59,18 @@ class ZigBeeController(AbstractController):
         return ZBParameter
 
     async def start(self):
-        self._zigbee_device_path = "/dev/ttyACM0"  # TODO: integration config and/or declaration of used devices
-        self._zigbe_db = "/home/zigbee/zigbee.db"  # TODO: integration data folder
+        self._zigbee_device_path = self.dependencies.hardware_interfaces[0]
+        self._zigbe_db = str(self.documents_folder / "zigbee.db")
         config = {CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path}, CONF_DATABASE: self._zigbe_db}
+
         # Starting zigbee stack
         self._application = await ControllerApplication.new(config=config, auto_form=True)
-        listener = ZigBeeDeviceListener(self)
+        listener = ZigBeeDeviceListener(self)  # TODO: why no device_id and no cluster_id passed? will cause issues
         self._application.add_listener(listener)
-        
+
         # Application loads db, loads all paired devies, and calls listener.device_initialized for each, which populates _connected_devices?
         # TODO: make sure it's sync; load our db as a fallback
-        
+
         async with self.dependencies.make_device_repository() as device_repo:
             for device_id, zbdevice in self._connected_devices.items():
                 if not device_repo.get(device_id, ZBDevice):
@@ -78,12 +79,12 @@ class ZigBeeController(AbstractController):
 
     async def stop(self):
         # TODO:
-            # 1. check the zigbee db disconnect error
-            # 2. clean _connected_devices and discoveries
+        # 1. check the zigbee db disconnect error
+        # 2. clean _connected_devices and discoveries
         if self._application:
             await self._application.shutdown()
 
-    async def open_network(self, seconds: int) -> None:
+    async def start_pairing_window(self, seconds: int) -> None:
         if not self._application:
             raise ValueError()
         await self._application.permit(seconds)
@@ -145,19 +146,19 @@ class ZigBeeController(AbstractController):
 
     async def send_command(self, command, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
-            raise ValueError() # TODO: raise IntegrationError.integration_not_started
+            raise ValueError()  # TODO: raise IntegrationError.integration_not_started
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
         if not (zbdevice := self._application.devices.get(ieee)):
-            raise ValueError() # TODO: raise IntegrationError.device_not_found
+            raise ValueError()  # TODO: raise IntegrationError.device_not_found
         if not (endpoint := zbdevice.endpoints.get(parameter.integration_data.endpoint_id)):
-            raise ValueError() # TODO: raise IntegrationError.internal_error
+            raise ValueError()  # TODO: raise IntegrationError.internal_error
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
             raise ValueError()
         # cluster = zbdevice.find_cluster(parameter.integration_data.cluster_id)
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
                 raise ValueError()
-            print(parameter.name, command.value) # TODO: logger.debug or nothing
+            print(parameter.name, command.value)  # TODO: logger.debug or nothing
             r = await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
             print(r)
         else:
@@ -172,7 +173,7 @@ class ZigBeeController(AbstractController):
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
             self._connected_devices[discovery.id] = zbdevice
-            
+
             assert device
             assert zbdevice
 
@@ -294,7 +295,6 @@ class ZigBeeController(AbstractController):
         self._connected_devices.pop(self._mapper.create_uuid_id(device.integration_data.ieee))
 
     # ZigBee Listener:
-
 
     # Private:
 

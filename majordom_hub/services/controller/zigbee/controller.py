@@ -112,7 +112,7 @@ class ZigBeeController(AbstractController):
                     events.append(
                         DeviceParameterChangedEvent(
                             device_id=device.id,
-                            parameter_id=self._mapper.create_uuid_id(f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
+                            parameter_id=self._mapper.create_uuid_id(f"{device.id.__str__()}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
                             value=value,
                         )
                     )
@@ -120,7 +120,7 @@ class ZigBeeController(AbstractController):
                     events.append(
                         DeviceParameterChangedEvent(
                             device_id=device.id,
-                            parameter_id=self._mapper.create_uuid_id(f"command_{endpoint_id}/{cluster_id}/{command_id}"),
+                            parameter_id=self._mapper.create_uuid_id(f"{device.id.__str__()}command_{endpoint_id}/{cluster_id}/{command_id}"),
                             value=None,
                         )
                     )
@@ -173,6 +173,7 @@ class ZigBeeController(AbstractController):
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
             self._connected_devices[discovery.id] = zbdevice
+            zbdevice.initialize
 
             assert device
             assert zbdevice
@@ -221,7 +222,7 @@ class ZigBeeController(AbstractController):
 
                         parameters.append(
                             ZBParameterState(
-                                id=self._mapper.create_uuid_id(f"attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
+                                id=self._mapper.create_uuid_id(f"{device.id.__str__()}attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
                                 name=attribute.name,
                                 data_type=data_type,
                                 visibility=visibility,
@@ -256,7 +257,7 @@ class ZigBeeController(AbstractController):
 
                             fields.append(
                                 Parameter(
-                                    id=self._mapper.create_uuid_id(f"field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"),
+                                    id=self._mapper.create_uuid_id(f"{device.id.__str__()}_field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"),
                                     name=field.name,
                                     data_type=self._mapper.parse_zigbee_data_type(field.type),
                                     role=ParameterRole.control,
@@ -269,7 +270,7 @@ class ZigBeeController(AbstractController):
                             )
                         parameters.append(
                             ZBParameterState(
-                                id=self._mapper.create_uuid_id(f"command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
+                                id=self._mapper.create_uuid_id(f"{device.id.__str__()}_command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
                                 name=command.name,
                                 data_type=ParameterDataType.none,
                                 role=ParameterRole.control,

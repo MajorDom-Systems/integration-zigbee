@@ -78,11 +78,11 @@ class ZigBeeController(AbstractController):
                 await self._subscribe(device_id, zbdevice)
 
     async def stop(self):
-        # TODO:
-        # 1. check the zigbee db disconnect error
-        # 2. clean _connected_devices and discoveries
         if self._application:
             await self._application.shutdown()
+        self._majordom_discoveries.clear()
+        self._awaiting_zb_discoveries.clear()
+        self._connected_devices.clear()
 
     async def start_pairing_window(self, seconds: int) -> None:
         if not self._application:

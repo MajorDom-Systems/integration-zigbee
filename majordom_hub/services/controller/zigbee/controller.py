@@ -68,14 +68,27 @@ class ZigBeeController(AbstractController):
         listener = ZigBeeDeviceListener(self)  # TODO: why no device_id and no cluster_id passed? will cause issues
         self._application.add_listener(listener)
 
-        # Application loads db, loads all paired devies, and calls listener.device_initialized for each, which populates _connected_devices?
-        # TODO: make sure it's sync; load our db as a fallback
 
         async with self.dependencies.make_device_repository() as device_repo:
-            for device_id, zbdevice in self._connected_devices.items():
-                if not device_repo.get(device_id, ZBDevice):
+            """
+            Subscribe to attribute updates and add the device to _connected_devices 
+            if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
+            """
+            for zbdevice in self._application.devices.values():
+                device_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(zbdevice.ieee))
+                if await device_repo.get(device_id, ZBDevice):
+                    self._connected_devices[device_id] = zbdevice
+                    await self._subscribe(device_id, zbdevice)
+                else:
+                    await zbdevice.initialize()
+
+            # Checking if all devices in our system are still connected to ZigBee
+            for device in await device_repo.get_all(self.name, ZBDevice):
+                ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
+                if self._application.get_device(ieee):
                     continue
-                await self._subscribe(device_id, zbdevice)
+                # TODO: Remove device from majordom database.
+                # TODO: Send an error message because the device was deleted from the ZigBee database.
 
     async def stop(self):
         if self._application:

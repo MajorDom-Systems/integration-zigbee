@@ -6,12 +6,14 @@ from uuid import UUID
 
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
+from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import ZCLAttributeAccess
 from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
-from majordom_hub.schemas.device import Discovery
+from majordom_hub.schemas.device import Discovery, CredentialsValue
+from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
@@ -70,16 +72,15 @@ class ZigBeeController(AbstractController):
 
 
         async with self.dependencies.make_device_repository() as device_repo:
-            """
-            Subscribe to attribute updates and add the device to _connected_devices 
-            if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
-            """
+            # Subscribe to attribute updates and add the device to _connected_devices 
+            # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
             for zbdevice in self._application.devices.values():
                 device_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(zbdevice.ieee))
                 if await device_repo.get(device_id, ZBDevice):
                     self._connected_devices[device_id] = zbdevice
                     await self._subscribe(device_id, zbdevice)
                 else:
+                    await self._disconnect_unpaired_discovery(device_id, zbdevice.ieee)
                     await zbdevice.initialize()
 
             # Checking if all devices in our system are still connected to ZigBee
@@ -133,7 +134,7 @@ class ZigBeeController(AbstractController):
                     events.append(
                         DeviceParameterChangedEvent(
                             device_id=device.id,
-                            parameter_id=self._mapper.create_uuid_id(f"{device.id.__str__()}command_{endpoint_id}/{cluster_id}/{command_id}"),
+                            parameter_id=self._mapper.create_uuid_id(f"{device.id.__str__()}_command_{endpoint_id}/{cluster_id}/{command_id}"),
                             value=None,
                         )
                     )
@@ -157,7 +158,7 @@ class ZigBeeController(AbstractController):
                 continue
             await cluster.identify(10)  # 10 - identification time
 
-    async def send_command(self, command, device: ZBDevice, parameter: ZBParameter):
+    async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
             raise ValueError()  # TODO: raise IntegrationError.integration_not_started
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
@@ -180,7 +181,7 @@ class ZigBeeController(AbstractController):
                 raise ValueError()
             await cluster.command(zbcommand.id, command.value) if command.value else await cluster.command(zbcommand.id)
 
-    async def pair_device(self, discovery: Discovery, credentials):
+    async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
             self._majordom_discoveries.pop(discovery.id)
@@ -312,16 +313,16 @@ class ZigBeeController(AbstractController):
 
     # Private:
 
-    async def _subscribe(self, device_id, device: ZPDevice):
+    async def _subscribe(self, device_id: UUID, device: ZPDevice):
         for endpoint in device.non_zdo_endpoints:
             for cluster in endpoint.in_clusters.values():
                 listener = ZigBeeDeviceListener(self, device_id, cluster)
                 cluster.add_listener(listener)
 
-    async def _disconnect_unpaired_discovery(self, discovery_id, ieee):
+    async def _disconnect_unpaired_discovery(self, discovery_id: UUID, ieee: EUI64):
         await asyncio.sleep(300)  # 5 minutes
-        if discovery_id not in self._majordom_discoveries:
-            # if was connected
+        if discovery_id not in self._majordom_discoveries and discovery_id in self._connected_devices:
+            # if the device was connected
             return
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)

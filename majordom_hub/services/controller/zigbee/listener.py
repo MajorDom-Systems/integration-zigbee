@@ -22,12 +22,22 @@ class ZigBeeDeviceListener:
 
         asyncio.create_task(self._controller.dependencies.output.controller_did_receive_device_events(self._controller, [event]))
 
+    def device_joined(self, device: Device):
+        """
+        Called only after the device is joined to ZigBee network(after start_pairing_window).
+        """
+        device_id = self._controller._mapper.create_uuid_id(self._controller._mapper.convert_eui64_to_str(device.ieee))
+        # Zigbee doesn't have discovery. All devices are connected to the network automatically after opening the network.
+        # We keep them in the waiting list until they are paired in majordom, then we move them to the connected list.
+        # If they are not paired within 5 minutes, we disconnect them from the network.
+        asyncio.create_task(self._controller._disconnect_unpaired_discovery(device_id, device.ieee))
+
     def device_initialized(self, device: Device):
         """
-        Called only when new devices paired, after start_pairing_window was called.
+        Called only after the device is fully initialized in a ZigBee network.
         """
 
-        discovery_id = self._controller._mapper.create_uuid_id(str(device.ieee))
+        discovery_id = self._controller._mapper.create_uuid_id(self._controller._mapper.convert_eui64_to_str(device.ieee))
         if discovery_id in self._controller.discoveries.keys():
             self._controller._subscribe(discovery_id, device)
             return
@@ -46,11 +56,6 @@ class ZigBeeDeviceListener:
         self._controller._majordom_discoveries[discovery_id] = discovery
         self._controller._awaiting_zb_discoveries[discovery_id] = device
 
-        # Zigbee doesn't have discovery. All devices are connected to the network automatically after opening the network.
-        # We keep them in the waiting list until they are paired in majordom, then we move them to the connected list.
-        # If they are not paired within 5 minutes, we disconnect them from the network.
         asyncio.create_task(self._controller.dependencies.output.controller_did_receive_discovery(self._controller, discovery))
-        asyncio.create_task(self._controller._disconnect_unpaired_discovery(discovery_id, device.ieee))
 
-    # TODO: listen for "joined", handle "joined but not initialized"
     # TODO: listen for "left", "disconnected", "stopped", etc

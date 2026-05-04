@@ -75,12 +75,14 @@ class ZigBeeController(AbstractController):
             # Subscribe to attribute updates and add the device to _connected_devices 
             # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
             for zbdevice in self._application.devices.values():
+                if zbdevice.nwk == 0x0000:
+                    continue
                 device_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(zbdevice.ieee))
                 if await device_repo.get(device_id, ZBDevice):
                     self._connected_devices[device_id] = zbdevice
                     await self._subscribe(device_id, zbdevice)
                 else:
-                    await self._disconnect_unpaired_discovery(device_id, zbdevice.ieee)
+                    asyncio.create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
                     await zbdevice.initialize()
 
             # Checking if all devices in our system are still connected to ZigBee

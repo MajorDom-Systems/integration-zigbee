@@ -7,7 +7,9 @@ from zigpy.zcl import Cluster
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.device import CredentialsType, Discovery, NonEmptyStr
 
-
+"""
+ZigBeeDeviceListener is a class for working with ZigBee events.
+"""
 class ZigBeeDeviceListener:
     def __init__(self, controller, device_id: UUID | None = None, cluster: Cluster | None = None):
         self._controller = controller
@@ -36,7 +38,6 @@ class ZigBeeDeviceListener:
         """
         Called only after the device is fully initialized in a ZigBee network.
         """
-
         discovery_id = self._controller._mapper.create_uuid_id(self._controller._mapper.convert_eui64_to_str(device.ieee))
         if discovery_id in self._controller.discoveries.keys():
             self._controller._subscribe(discovery_id, device)

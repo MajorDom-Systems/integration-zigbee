@@ -5,28 +5,18 @@ from starlette.websockets import WebSocketDisconnect
 
 
 @pytest.mark.asyncio
-async def test_discovery_paired(async_client, crud, get_user_bearer):
-    # TODO: fully pair a device XD
-    user = await crud.create_user()
-    r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200 and r.json() == [], f"Sth is wrong, {r.json()}"
-
-
-@pytest.mark.asyncio
 async def test_discovery_unpaired(async_client, crud, get_user_bearer):
-    # test_device_name?
+    discovery_id = "c17efe96-b199-5a9c-ae42-321121dfbe25"
     user = await crud.create_user()
-    await async_client.post("v1/api/device/start_pairing_window?time=30", headers=get_user_bearer(user.id))
+    r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=30", headers=get_user_bearer(user.id))
+    assert r.status_code == 200, r.json()
     await asyncio.sleep(30)
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200, r.json() != {}  # test_device_name in here?
-    # TODO: fix assert syntax
+    assert r.status_code == 200 and discovery_id in r.json(), r.json()
 
 
 @pytest.mark.asyncio
 async def test_pair(async_client, crud, get_user_bearer):
-    # is device expecting to be paired? is theere a discovery after start_pairing_window?
-
     user = await crud.create_user()
     room = await crud.create_room()
 
@@ -41,17 +31,24 @@ async def test_pair(async_client, crud, get_user_bearer):
     }
 
     r = await async_client.post("/v1/api/device", json=data, headers=get_user_bearer(user.id))
-    assert r.status_code == 200, r.json()  # NOTE: that prints r.json if assert fails; it doesn't check the json contents!
+    assert r.status_code == 200 and r.json() and r.json()["name"] == data.get("name"), r.json()
 
 
 @pytest.mark.asyncio
-async def test_control_command(crud, async_client_ws_connect, async_client, get_user_bearer):
+async def test_discovery_paired(async_client, crud, get_user_bearer):
+    user = await crud.create_user()
+    r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
+    assert r.status_code == 200 and r.json() == {}, f"Sth is wrong, {r.json()}"
+
+
+@pytest.mark.asyncio
+async def test_control_command(crud, async_client_ws_connect):
     user = await crud.create_user()
     command = {
         "type": "device_command",
         "data": {
             "device_id": "c17efe96-b199-5a9c-ae42-321121dfbe25",
-            "parameter_id": "f98ccaf3-38e7-5d63-8f3e-fb68c317689e",
+            "parameter_id": "6063563a-9c00-506c-8616-9e1b45576c71",
             "value": None,
         },
     }
@@ -72,13 +69,13 @@ async def test_control_command(crud, async_client_ws_connect, async_client, get_
 
 
 @pytest.mark.asyncio
-async def test_controll_attribute(crud, async_client_ws_connect, async_client, get_user_bearer):
+async def test_controll_attribute(crud, async_client_ws_connect):
     user = await crud.create_user()
     command = {
         "type": "device_command",
         "data": {
             "device_id": "c17efe96-b199-5a9c-ae42-321121dfbe25",
-            "parameter_id": "74b12f8c-679f-5630-833a-551cc29aa0b1",
+            "parameter_id": "35963eae-bbb8-52f3-a7c6-6c59a4f1798d",
             "value": 0,
         },
     }
@@ -98,14 +95,17 @@ async def test_controll_attribute(crud, async_client_ws_connect, async_client, g
     assert message and message.get("type") == "majordom_did_receive_event", message
 
 
+"""
 @pytest.mark.asyncio
 async def test_events():
     raise NotImplementedError()  # TODO: test that when an attribute is updated, the correct event is sent to majordom
 
+"""
+
 
 @pytest.mark.asyncio
 async def test_unpair(async_client, crud, get_user_bearer):
-    # where is `c17efe96-b199-5a9c-ae42-321121dfbe25` from?
+    device_id = "c17efe96-b199-5a9c-ae42-321121dfbe25"
     user = await crud.create_user()
-    r = await async_client.delete("/v1/api/device/c17efe96-b199-5a9c-ae42-321121dfbe25", headers=get_user_bearer(user.id))
+    r = await async_client.delete(f"/v1/api/device/{device_id}", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()

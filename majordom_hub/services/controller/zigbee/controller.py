@@ -291,7 +291,7 @@ class ZigBeeController(AbstractController):
                                 data_type=ParameterDataType.none,
                                 role=ParameterRole.control,
                                 fields=json.loads(json.dumps([f.model_dump(mode="json") for f in fields])) if fields else None,
-                                visibility=ParameterVisibility.setting,
+                                visibility=ParameterVisibility.user,
                                 integration_data=ZBParameterIntegrationData(
                                     endpoint_id=endpoint.endpoint_id,
                                     cluster_id=cluster.cluster_id,

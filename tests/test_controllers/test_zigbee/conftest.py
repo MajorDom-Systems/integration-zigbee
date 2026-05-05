@@ -43,7 +43,7 @@ async def cloud_service_mock_zb():
 @pytest_asyncio.fixture(scope="session")
 async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb):
     with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
-        c = Coordinator(is_virtual_mode=True)
+        c = Coordinator()
         await c.start(wait_forever=False)
         yield c
         await c.stop()

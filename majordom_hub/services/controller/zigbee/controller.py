@@ -5,7 +5,7 @@ from typing import Type, override
 from uuid import UUID
 
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
-from zigpy.device import Device as ZPDevice  # ZP - ZigPy
+from zigpy.device import Device as ZPDevice, Cluster  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import ZCLAttributeAccess
@@ -302,6 +302,7 @@ class ZigBeeController(AbstractController):
                             )
                         )
             device.parameters = parameters
+            device.main_parameter = self._get_device_main_parameter(device.id, zbdevice)
             await device_repository.save(device, discovery.id)
             await self.dependencies.output.controller_did_connect_device(self, discovery.id)
 
@@ -329,3 +330,22 @@ class ZigBeeController(AbstractController):
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)
         self._awaiting_zb_discoveries.pop(discovery_id)
+
+    def _get_device_main_parameter(self, device_id: UUID, zbdevice: ZPDevice) -> UUID | None:
+        for endpoint in zbdevice.non_zdo_endpoints:
+            if endpoint.in_clusters.get(0x0006):  # OnOff
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/6/2")
+            if endpoint.in_clusters.get(0x0008):  # LevelControl
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/8/0")
+            if endpoint.in_clusters.get(0x0300):  # ColorControl
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/300/7")
+            if endpoint.in_clusters.get(0x0102):  # WindowCovering
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/102/8")
+            if endpoint.in_clusters.get(0x0201):  # Termostat
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/201/18")
+            if endpoint.in_clusters.get(0x0202):  # FanContorl
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/202/0")
+            if endpoint.in_clusters.get(0x0101):  # LockState
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/101/0")
+
+        return None

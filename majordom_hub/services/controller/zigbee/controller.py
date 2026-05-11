@@ -199,13 +199,11 @@ class ZigBeeController(AbstractController):
             parameters: list[ZBParameterState] = list()
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
-                    if cluster.cluster_id in SYSTEM_CLUSTERS:  # skip system clusters
-                        continue
                     for attribute_id, attribute in cluster.attributes.items():
                         value = b""
 
                         visibility = ParameterVisibility.system
-                        if attribute_id < 0xF000:  # next manufacturer specifik and global/system attributes
+                        if attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:  # next manufacturer specifik and global/system attributes
                             if attribute.access & ZCLAttributeAccess.Report:
                                 visibility = ParameterVisibility.user
                             elif attribute.access & ZCLAttributeAccess.Write:
@@ -259,11 +257,16 @@ class ZigBeeController(AbstractController):
                         )
                     for command in cluster.commands:
                         fields: list[Parameter] = []
+                        visibility = ParameterVisibility.user
+
+                        if cluster.cluster_id in SYSTEM_CLUSTERS:
+                            visibility = ParameterVisibility.system
+
                         for i, field in enumerate(command.schema.fields):
                             min_value = None
                             max_value = None
                             valid_values = None
-
+                            
                             if hasattr(field.type, "min_value"):
                                 min_value = field.type.min_value
                             if hasattr(field.type, "max_value"):
@@ -277,7 +280,7 @@ class ZigBeeController(AbstractController):
                                     name=field.name,
                                     data_type=self._mapper.parse_zigbee_data_type(field.type),
                                     role=ParameterRole.control,
-                                    visibility=ParameterVisibility.setting,
+                                    visibility=ParameterVisibility.setting, 
                                     min_value=min_value,
                                     max_value=max_value,
                                     valid_values=valid_values,
@@ -291,7 +294,7 @@ class ZigBeeController(AbstractController):
                                 data_type=ParameterDataType.none,
                                 role=ParameterRole.control,
                                 fields=json.loads(json.dumps([f.model_dump(mode="json") for f in fields])) if fields else None,
-                                visibility=ParameterVisibility.user,
+                                visibility=visibility,
                                 integration_data=ZBParameterIntegrationData(
                                     endpoint_id=endpoint.endpoint_id,
                                     cluster_id=cluster.cluster_id,

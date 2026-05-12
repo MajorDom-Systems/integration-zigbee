@@ -18,6 +18,7 @@ from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
+from .exceptions import ZBConnectionError, ZBUnexpectedError
 from .listener import ZBAttributeUpdatedListener
 from .mapper import ZigBeeMapper
 from .model import (
@@ -102,19 +103,19 @@ class ZigBeeController(AbstractController):
 
     async def start_pairing_window(self, seconds: int) -> None:
         if not self._application:
-            raise ValueError()
+            raise ZBConnectionError("ZigBee application is not started")
         await self._application.permit(seconds)
 
     async def fetch(self, device: ZBDevice) -> None:
         if not self._application:
-            raise ValueError()
+            raise ZBConnectionError("ZigBee application is not started")
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
         if not (zbdevice := self._application.devices.get(ieee)):
-            raise ValueError()
+            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
         if not zbdevice.is_initialized:
-            raise ValueError()
+            raise ZBUnexpectedError(f"Device {ieee} is not initialized")
         events: list[DeviceParameterChangedEvent] = list()
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
@@ -145,14 +146,14 @@ class ZigBeeController(AbstractController):
 
     async def identify(self, device: ZBDevice):
         if not self._application:
-            raise ValueError()
+            raise ZBConnectionError("ZigBee application is not started")
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
         if not (zbdevice := self._application.devices.get(ieee)):
-            raise ValueError()
+            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
         if not zbdevice.is_initialized:
-            raise ValueError()
+            raise ZBUnexpectedError(f"Device {ieee} is not initialized")
 
         for endpoint in zbdevice.non_zdo_endpoints:
             cluster = endpoint.in_clusters.get(Identify.cluster_id)
@@ -162,23 +163,26 @@ class ZigBeeController(AbstractController):
 
     async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
-            raise ValueError()  # TODO: raise IntegrationError.integration_not_started
+            raise ZBConnectionError("ZigBee application is not started")
+
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
+
         if not (zbdevice := self._application.devices.get(ieee)):
-            raise ValueError()  # TODO: raise IntegrationError.device_not_found
+            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
         if not (endpoint := zbdevice.endpoints.get(parameter.integration_data.endpoint_id)):
-            raise ValueError()  # TODO: raise IntegrationError.internal_error
+            raise ZBUnexpectedError(f"Endpoint {parameter.integration_data.endpoint_id} not found")
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
-            raise ValueError()
+            raise ZBUnexpectedError(f"Cluster {parameter.integration_data.cluster_id} not found")
+    
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
-                raise ValueError()
+                raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
             r = await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
             logging.info(r)
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
-                raise ValueError()
+                raise ZBUnexpectedError(f"Command {parameter.name} not found in cluster")
             await cluster.command(zbcommand.id, command.value) if command.value else await cluster.command(zbcommand.id)
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):  # Break down into submethods
@@ -187,7 +191,6 @@ class ZigBeeController(AbstractController):
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
             self._connected_devices[discovery.id] = zbdevice
-
 
             assert device
             assert zbdevice
@@ -308,7 +311,7 @@ class ZigBeeController(AbstractController):
 
     async def unpair(self, device: ZBDevice):
         if not self._application:
-            raise ValueError()
+            raise ZBConnectionError("ZigBee application is not started")
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.create_uuid_id(device.integration_data.ieee))
 

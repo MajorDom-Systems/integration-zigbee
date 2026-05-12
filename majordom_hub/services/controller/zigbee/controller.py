@@ -1,9 +1,10 @@
 import asyncio
 import json
+import logging
+
 from enum import Enum
 from typing import Type, override
 from uuid import UUID
-
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice, Cluster  # ZP - ZigPy
 from zigpy.types import EUI64
@@ -121,7 +122,7 @@ class ZigBeeController(AbstractController):
                     values, failures = await cluster.read_attributes([attribute_id])
                     if failures:
                         value = None
-                        print(failures)
+                        logging.error(failures)
                     else:
                         value = values.get(attribute_id)
                     events.append(
@@ -172,9 +173,8 @@ class ZigBeeController(AbstractController):
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
                 raise ValueError()
-            print(parameter.name, command.value)  # TODO: logger.debug or nothing
             r = await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
-            print(r)
+            logging.info(r)
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
@@ -210,8 +210,7 @@ class ZigBeeController(AbstractController):
                         if attribute.access & ZCLAttributeAccess.Read:
                             values, failures = await cluster.read_attributes([attribute_id])
                             if failures:
-                                print(failures)
-                                # TODO: logger.error
+                                logging.error(failures)
                             else:
                                 temp = values.get(attribute_id)
                                 if temp is not None:

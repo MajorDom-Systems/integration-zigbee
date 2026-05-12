@@ -93,6 +93,7 @@ class ZigBeeController(AbstractController):
                     continue
                 device.available = False
                 device.last_error = f"Device {device.name} is no longer connected to the ZigBee network"
+                await device_repo.save(device, device.id)
 
     async def stop(self):
         if self._application:

@@ -91,8 +91,8 @@ class ZigBeeController(AbstractController):
                 ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
                 if self._application.get_device(ieee):
                     continue
-                # TODO: Remove device from majordom database.
-                # TODO: Send an error message because the device was deleted from the ZigBee database.
+                device.available = False
+                device.last_error = f"Device {device.name} is no longer connected to the ZigBee network"
 
     async def stop(self):
         if self._application:

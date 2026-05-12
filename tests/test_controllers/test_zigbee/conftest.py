@@ -17,6 +17,10 @@ from majordom_hub.providers.paths import Paths
 cloud_key = Paths.data.keys.cloud.read_text()
 
 
+@pytest_asyncio.fixture()
+async def clear_db():
+    pass
+
 @pytest.fixture(scope="session")
 def event_loop():
     loop = asyncio.new_event_loop()

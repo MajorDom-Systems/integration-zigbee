@@ -12,12 +12,12 @@ from zigpy.zcl.foundation import ZCLAttributeAccess
 from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
-from majordom_hub.schemas.device import Discovery, CredentialsValue
+from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery, NonEmptyStr
 from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
-from .listener import ZigBeeDeviceListener
+from .listener import ZBAttributeUpdatedListener
 from .mapper import ZigBeeMapper
 from .model import (
     Parameter,
@@ -37,8 +37,8 @@ class ZigBeeController(AbstractController):
     _zigbe_db: str
     # _application: ControllerApplication
     _majordom_discoveries: dict[UUID, Discovery] = dict()  # MJ discovery metadata
-    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = dict()  # connected to zigbee network but not set up in majordom yet
-    _connected_devices: dict[UUID, ZPDevice] = dict()  # fully connected
+    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = dict()  # connected to zigbee network but not set up in majordom yet. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
+    _connected_devices: dict[UUID, ZPDevice] = dict()  # fully connected. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
 
     _mapper = ZigBeeMapper()
 
@@ -67,8 +67,7 @@ class ZigBeeController(AbstractController):
 
         # Starting zigbee stack
         self._application = await ControllerApplication.new(config=config, auto_form=True)
-        listener = ZigBeeDeviceListener(self)  # TODO: why no device_id and no cluster_id passed? will cause issues
-        self._application.add_listener(listener)
+        self._application.add_listener(self)
 
 
         async with self.dependencies.make_device_repository() as device_repo:
@@ -170,7 +169,6 @@ class ZigBeeController(AbstractController):
             raise ValueError()  # TODO: raise IntegrationError.internal_error
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
             raise ValueError()
-        # cluster = zbdevice.find_cluster(parameter.integration_data.cluster_id)
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
                 raise ValueError()
@@ -183,13 +181,13 @@ class ZigBeeController(AbstractController):
                 raise ValueError()
             await cluster.command(zbcommand.id, command.value) if command.value else await cluster.command(zbcommand.id)
 
-    async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
+    async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):  # Break down into submethods
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
             self._connected_devices[discovery.id] = zbdevice
-            zbdevice.initialize
+
 
             assert device
             assert zbdevice
@@ -317,12 +315,50 @@ class ZigBeeController(AbstractController):
 
     # ZigBee Listener:
 
+    def device_joined(self, device: ZPDevice):
+        """
+        Called only after the device is joined to ZigBee network(after start_pairing_window).
+        """
+        discovery_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(device.ieee))
+        # Zigbee doesn't have discovery. All devices are connected to the network automatically after opening the network.
+        # We keep them in the waiting list until they are paired in majordom, then we move them to the connected list.
+        # If they are not paired within 5 minutes, we disconnect them from the network.
+        asyncio.create_task(self._disconnect_unpaired_discovery(discovery_id, device.ieee))
+
+    def device_initialized(self, device: ZPDevice):
+        """
+        Called only after the device is fully initialized in a ZigBee network.
+        """
+        discovery_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(device.ieee))
+        if discovery_id in self.discoveries:
+            asyncio.create_task(self._subscribe(discovery_id, device))
+            return
+        discovery = Discovery(
+            id=discovery_id,
+            integration=NonEmptyStr(self.name),
+            credentials=CredentialsType.none,
+            expiration=None,
+            transport=NonEmptyStr("ZIGBEE"),
+            device_manufacturer=None,
+            device_name=NonEmptyStr(device.name),
+            device_category=None,
+            device_icon=None,
+        )
+        
+        self._majordom_discoveries[discovery_id] = discovery
+        self._awaiting_zb_discoveries[discovery_id] = device
+
+        asyncio.create_task(self.dependencies.output.controller_did_receive_discovery(self, discovery))
+
+        # TODO: listen for "left", "disconnected", "stopped", etc
+
+
     # Private:
 
     async def _subscribe(self, device_id: UUID, device: ZPDevice):
         for endpoint in device.non_zdo_endpoints:
             for cluster in endpoint.in_clusters.values():
-                listener = ZigBeeDeviceListener(self, device_id, cluster)
+                listener = ZBAttributeUpdatedListener(self, device_id, cluster)
                 cluster.add_listener(listener)
 
     async def _disconnect_unpaired_discovery(self, discovery_id: UUID, ieee: EUI64):

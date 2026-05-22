@@ -21,6 +21,7 @@ cloud_key = Paths.data.keys.cloud.read_text()
 async def clear_db():
     pass
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     loop = asyncio.new_event_loop()

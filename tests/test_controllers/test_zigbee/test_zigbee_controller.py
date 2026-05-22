@@ -5,12 +5,31 @@ from starlette.websockets import WebSocketDisconnect
 
 
 @pytest.mark.asyncio
-async def test_discovery_unpaired(async_client, crud, get_user_bearer):
+async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer):
     discovery_id = "c17efe96-b199-5a9c-ae42-321121dfbe25"
     user = await crud.create_user()
-    r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=30", headers=get_user_bearer(user.id))
-    assert r.status_code == 200, r.json()
-    await asyncio.sleep(30)
+
+    message = None
+    try:
+        async with async_client_ws_connect(user.id) as ws:
+            # scan
+            r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=30", headers=get_user_bearer(user.id))
+            assert r.status_code == 200, r.json()
+
+            # wait for the discovery message
+            async with asyncio.timeout(3):
+                while True:
+                    message = await ws.receive_json()
+                    if message["type"] == "majordom_did_discover_discovery":
+                        break  # got the message, can exit
+                    else:
+                        continue  # trying again
+    except WebSocketDisconnect as e:
+        assert e.code == 1000
+    # confirm the discovery message
+    assert message and message.get("type") == "majordom_did_discover_discovery", message
+
+    # confirm rest api works too
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
     assert r.status_code == 200 and discovery_id in r.json(), r.json()
 
@@ -55,14 +74,14 @@ async def test_control_command(crud, async_client_ws_connect):
     message = None
     try:
         async with async_client_ws_connect(user.id) as ws:
-            await ws.send_json(command)  # should this be out of the loop?
+            await ws.send_json(command)
             async with asyncio.timeout(1):
                 while True:
                     message = await ws.receive_json()
-                    if message["type"] == "majordom_did_connect_device":
-                        continue
-                    else:
+                    if message["type"] == "majordom_did_receive_event":
                         break
+                    else:
+                        continue
     except WebSocketDisconnect as e:
         assert e.code == 1000
     assert message and message.get("type") == "majordom_did_receive_event", message

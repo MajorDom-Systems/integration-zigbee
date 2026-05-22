@@ -1,20 +1,20 @@
 import asyncio
 import json
 import logging
-
 from enum import Enum
 from typing import Type, override
 from uuid import UUID
+
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
-from zigpy.device import Device as ZPDevice, Cluster  # ZP - ZigPy
+from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import ZCLAttributeAccess
 from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
-from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery, NonEmptyStr
 from majordom_hub.schemas.command import DeviceCommand
+from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery, NonEmptyStr
 from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
@@ -39,10 +39,15 @@ class ZigBeeController(AbstractController):
     _zigbe_db: str
     # _application: ControllerApplication
     _majordom_discoveries: dict[UUID, Discovery] = dict()  # MJ discovery metadata
-    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = dict()  # connected to zigbee network but not set up in majordom yet. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
-    _connected_devices: dict[UUID, ZPDevice] = dict()  # fully connected. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
+    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = (
+        dict()
+    )  # connected to zigbee network but not set up in majordom yet. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
+    _connected_devices: dict[UUID, ZPDevice] = (
+        dict()
+    )  # fully connected. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
 
     _mapper = ZigBeeMapper()
+    _tasks: set[asyncio.Task] = set()
 
     @property
     def name(self) -> str:
@@ -71,9 +76,8 @@ class ZigBeeController(AbstractController):
         self._application = await ControllerApplication.new(config=config, auto_form=True)
         self._application.add_listener(self)
 
-
         async with self.dependencies.make_device_repository() as device_repo:
-            # Subscribe to attribute updates and add the device to _connected_devices 
+            # Subscribe to attribute updates and add the device to _connected_devices
             # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
             for zbdevice in self._application.devices.values():
                 if zbdevice.nwk == 0x0000:
@@ -83,7 +87,7 @@ class ZigBeeController(AbstractController):
                     self._connected_devices[device_id] = zbdevice
                     await self._subscribe(device_id, zbdevice)
                 else:
-                    asyncio.create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
+                    self._create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
                     await zbdevice.initialize()
 
             # Checking if all devices in our system are still connected to ZigBee
@@ -96,6 +100,11 @@ class ZigBeeController(AbstractController):
                 await device_repo.save(device, device.id)
 
     async def stop(self):
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         if self._application:
             await self._application.shutdown()
         self._majordom_discoveries.clear()
@@ -174,7 +183,7 @@ class ZigBeeController(AbstractController):
             raise ZBUnexpectedError(f"Endpoint {parameter.integration_data.endpoint_id} not found")
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
             raise ZBUnexpectedError(f"Cluster {parameter.integration_data.cluster_id} not found")
-    
+
         if parameter.integration_data.type is ZBParameterType.attribute:
             if parameter.role != ParameterRole.control:
                 raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
@@ -205,7 +214,9 @@ class ZigBeeController(AbstractController):
                         value = b""
 
                         visibility = ParameterVisibility.system
-                        if attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:  # next manufacturer specifik and global/system attributes
+                        if (
+                            attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS
+                        ):  # next manufacturer specifik and global/system attributes
                             if attribute.access & ZCLAttributeAccess.Report:
                                 visibility = ParameterVisibility.user
                             elif attribute.access & ZCLAttributeAccess.Write:
@@ -237,7 +248,9 @@ class ZigBeeController(AbstractController):
 
                         parameters.append(
                             ZBParameterState(
-                                id=self._mapper.create_uuid_id(f"{device.id.__str__()}attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"),
+                                id=self._mapper.create_uuid_id(
+                                    f"{device.id.__str__()}attribute_{endpoint.endpoint_id}/{cluster.cluster_id}/{attribute_id}"
+                                ),
                                 name=attribute.name,
                                 data_type=data_type,
                                 visibility=visibility,
@@ -267,7 +280,7 @@ class ZigBeeController(AbstractController):
                             min_value = None
                             max_value = None
                             valid_values = None
-                            
+
                             if hasattr(field.type, "min_value"):
                                 min_value = field.type.min_value
                             if hasattr(field.type, "max_value"):
@@ -277,11 +290,13 @@ class ZigBeeController(AbstractController):
 
                             fields.append(
                                 Parameter(
-                                    id=self._mapper.create_uuid_id(f"{device.id.__str__()}_field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"),
+                                    id=self._mapper.create_uuid_id(
+                                        f"{device.id.__str__()}_field_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}/{i}"
+                                    ),
                                     name=field.name,
                                     data_type=self._mapper.parse_zigbee_data_type(field.type),
                                     role=ParameterRole.control,
-                                    visibility=ParameterVisibility.setting, 
+                                    visibility=ParameterVisibility.setting,
                                     min_value=min_value,
                                     max_value=max_value,
                                     valid_values=valid_values,
@@ -290,7 +305,9 @@ class ZigBeeController(AbstractController):
                             )
                         parameters.append(
                             ZBParameterState(
-                                id=self._mapper.create_uuid_id(f"{device.id.__str__()}_command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"),
+                                id=self._mapper.create_uuid_id(
+                                    f"{device.id.__str__()}_command_{endpoint.endpoint_id}/{cluster.cluster_id}/{command.id}"
+                                ),
                                 name=command.name,
                                 data_type=ParameterDataType.none,
                                 role=ParameterRole.control,
@@ -326,7 +343,7 @@ class ZigBeeController(AbstractController):
         # Zigbee doesn't have discovery. All devices are connected to the network automatically after opening the network.
         # We keep them in the waiting list until they are paired in majordom, then we move them to the connected list.
         # If they are not paired within 5 minutes, we disconnect them from the network.
-        asyncio.create_task(self._disconnect_unpaired_discovery(discovery_id, device.ieee))
+        self._create_task(self._disconnect_unpaired_discovery(discovery_id, device.ieee))
 
     def device_initialized(self, device: ZPDevice):
         """
@@ -334,7 +351,7 @@ class ZigBeeController(AbstractController):
         """
         discovery_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(device.ieee))
         if discovery_id in self.discoveries:
-            asyncio.create_task(self._subscribe(discovery_id, device))
+            self._create_task(self._subscribe(discovery_id, device))
             return
         discovery = Discovery(
             id=discovery_id,
@@ -347,16 +364,21 @@ class ZigBeeController(AbstractController):
             device_category=None,
             device_icon=None,
         )
-        
+
         self._majordom_discoveries[discovery_id] = discovery
         self._awaiting_zb_discoveries[discovery_id] = device
 
-        asyncio.create_task(self.dependencies.output.controller_did_receive_discovery(self, discovery))
+        self._create_task(self.dependencies.output.controller_did_receive_discovery(self, discovery))
 
         # TODO: listen for "left", "disconnected", "stopped", etc
 
-
     # Private:
+
+    def _create_task(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
 
     async def _subscribe(self, device_id: UUID, device: ZPDevice):
         for endpoint in device.non_zdo_endpoints:

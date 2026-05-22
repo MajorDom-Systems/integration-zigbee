@@ -3,6 +3,8 @@ import asyncio
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
+pytestmark = pytest.mark.real_iot_device
+
 
 @pytest.mark.asyncio
 async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer):

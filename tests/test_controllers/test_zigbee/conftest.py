@@ -1,3 +1,5 @@
+# Enable ZigbeeController for zigbee tests
+# os.environ["DISABLE_SERVICES"] = ", ".join(VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"})
 import asyncio
 import time
 from contextlib import asynccontextmanager

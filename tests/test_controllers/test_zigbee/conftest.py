@@ -1,5 +1,3 @@
-# Enable ZigbeeController for zigbee tests
-# os.environ["DISABLE_SERVICES"] = ", ".join(VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"})
 import asyncio
 import time
 from contextlib import asynccontextmanager
@@ -13,6 +11,7 @@ from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 from jose import jwt
 
+from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
 
@@ -50,7 +49,7 @@ async def cloud_service_mock_zb():
 @pytest_asyncio.fixture(scope="session")
 async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb):
     with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
-        c = Coordinator()
+        c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"}))
         await c.start(wait_forever=False)
         yield c
         await c.stop()
@@ -80,6 +79,179 @@ def async_client_ws_connect(coordinator, get_user_bearer):
     async def _connect(user_id: UUID):
         async with AsyncClient(transport=ASGIWebSocketTransport(app=coordinator.server_service.app), base_url="ws://testserver") as client:
             async with aconnect_ws("/v1/ws/user", client, headers=get_user_bearer(user_id)) as ws:
+                yield ws
+
+    return _connect
+
+
+# ---------------------------------------------------------------------------
+# Mocked ZigBee fixtures (no real hardware required)
+# ---------------------------------------------------------------------------
+
+import zigpy.application
+import zigpy.endpoint
+import zigpy.profiles
+import zigpy.state as app_state
+import zigpy.types as t
+import zigpy.zdo.types as zdo_t
+from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
+
+from majordom_hub.services.controller.framework.relay_controller import RelayController
+from majordom_hub.services.service_manager import ServiceProxy
+
+# IEEE 00:11:22:33:44:55:66:77 → discovery_id b10d1e10-189b-5c0f-a68f-6d90c4c07d7f
+_MOCK_IEEE = t.EUI64.convert("00:11:22:33:44:55:66:77")
+_MOCK_NWK = t.NWK(0x1234)
+_NCP_IEEE = t.EUI64.convert("aa:11:22:bb:33:44:be:ef")
+
+
+def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.device.Device:
+    dev = app.add_device(nwk=_MOCK_NWK, ieee=_MOCK_IEEE)
+    dev.node_desc = zdo_t.NodeDescriptor(
+        logical_type=zdo_t.LogicalType.Router,
+        complex_descriptor_available=0,
+        user_descriptor_available=0,
+        reserved=0,
+        aps_flags=0,
+        frequency_band=zdo_t.NodeDescriptor.FrequencyBand.Freq2400MHz,
+        mac_capability_flags=zdo_t.NodeDescriptor.MACCapabilityFlags.AllocateAddress,
+        manufacturer_code=4174,
+        maximum_buffer_size=82,
+        maximum_incoming_transfer_size=82,
+        server_mask=0,
+        maximum_outgoing_transfer_size=82,
+        descriptor_capability_field=zdo_t.NodeDescriptor.DescriptorCapability.NONE,
+    )
+    ep = dev.add_endpoint(1)
+    ep.status = zigpy.endpoint.Status.ZDO_INIT
+    ep.profile_id = 260
+    ep.device_type = zigpy.profiles.zha.DeviceType.ON_OFF_LIGHT
+    ep.add_input_cluster(6)  # OnOff
+    ep.add_input_cluster(8)  # LevelControl
+    return dev
+
+
+class _MockZigpyApp(zigpy.application.ControllerApplication):
+    """In-memory zigpy stub — no hardware, no DB."""
+
+    _zb_controller = None  # injected after coordinator.start()
+
+    async def send_packet(self, *_):
+        pass
+
+    async def connect(self, *_):
+        pass
+
+    async def disconnect(self, *_):
+        pass
+
+    async def start_network(self, *_):
+        pass
+
+    async def force_remove(self, *_):
+        pass
+
+    async def add_endpoint(self, *_):
+        pass
+
+    async def permit_ncp(self, *_):
+        pass
+
+    async def write_network_info(self, *_):
+        pass
+
+    async def reset_network_info(self, *_):
+        pass
+
+    async def permit_with_link_key(self, *_):
+        pass
+
+    async def shutdown(self, *_):
+        pass
+
+    async def load_network_info(self, *, load_devices=False):
+        self.state.network_info.channel = 15
+
+    async def permit(self, time_s=60, node=None):
+        """Simulate a device joining — triggers device_joined + device_initialized."""
+        if self._zb_controller is None:
+            return
+        dev = _make_mock_zb_device(self)
+        self._zb_controller.device_joined(dev)
+        await asyncio.sleep(0.05)  # let WS message propagate
+        self._zb_controller.device_initialized(dev)
+
+    async def remove(self, ieee):
+        if self.get_device(ieee):
+            del self.devices[ieee]
+
+
+@pytest_asyncio.fixture(scope="session")
+async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb):
+    mock_app: list[_MockZigpyApp] = []
+
+    async def _new(config, auto_form=False):
+        app = _MockZigpyApp({CONF_DATABASE: None, CONF_DEVICE: {CONF_DEVICE_PATH: "/dev/null"}})
+        app.state.node_info = app_state.NodeInfo(nwk=t.NWK(0x0000), ieee=_NCP_IEEE, logical_type=zdo_t.LogicalType.Coordinator)
+        mock_app.append(app)
+        return app
+
+    with (
+        patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock),
+        patch("majordom_hub.services.controller.zigbee.controller.ControllerApplication.new", side_effect=_new),
+        patch("zigpy.zcl.Cluster.read_attributes", new_callable=AsyncMock, return_value=({}, {})),
+        patch("zigpy.zcl.Cluster.write_attributes", new_callable=AsyncMock, return_value=[{}, {}]),
+        patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
+    ):
+        c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"}))
+        await c.start(wait_forever=False)
+
+        # Wire permit() callbacks to ZigBeeController
+        for service in c.services:
+            real = object.__getattribute__(service, "_real") if isinstance(service, ServiceProxy) else service
+            if isinstance(real, RelayController) and "ZigBee" in real._controllers:
+                mock_app[0]._zb_controller = real._controllers["ZigBee"]
+                break
+        else:
+            raise RuntimeError("ZigBeeController not found in coordinator services")
+
+        # Clean up stale device from a previous test run
+        from majordom_hub.repository.device_repository import DeviceRepository
+        from majordom_hub.utils.database import create_async_session as _db
+
+        async with _db() as session:
+            repo = DeviceRepository(session)
+            if await repo.get(UUID("b10d1e10-189b-5c0f-a68f-6d90c4c07d7f")):
+                await repo.delete(UUID("b10d1e10-189b-5c0f-a68f-6d90c4c07d7f"))
+
+        yield c
+        await c.stop()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def async_client_mocked(coordinator_mocked):
+    async with AsyncClient(transport=ASGITransport(app=coordinator_mocked.server_service.app), base_url="http://testserver") as client:
+        yield client
+
+
+@pytest.fixture(scope="session")
+def get_user_bearer_mocked():
+    return lambda id: {
+        "Authorization": "Bearer "
+        + jwt.encode(
+            {"role": "access", "user_id": id.hex if isinstance(id, UUID) else id, "is_admin": False, "exp": time.time() + 3600},
+            cloud_key,
+            algorithm="RS256",
+        )
+    }
+
+
+@pytest.fixture(scope="session")
+def async_client_ws_connect_mocked(coordinator_mocked, get_user_bearer_mocked):
+    @asynccontextmanager
+    async def _connect(user_id: UUID):
+        async with AsyncClient(transport=ASGIWebSocketTransport(app=coordinator_mocked.server_service.app), base_url="ws://testserver") as client:
+            async with aconnect_ws("/v1/ws/user", client, headers=get_user_bearer_mocked(user_id)) as ws:
                 yield ws
 
     return _connect

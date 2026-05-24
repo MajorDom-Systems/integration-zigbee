@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from enum import Enum
-from typing import Type, override
+from typing import ClassVar, Literal, Type, override
 from uuid import UUID
 
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
@@ -10,7 +10,6 @@ from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import ZCLAttributeAccess
-from zigpy_znp.zigbee.application import ControllerApplication
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.command import DeviceCommand
@@ -35,6 +34,8 @@ from .zigbee_spec import SYSTEM_CLUSTERS, get_min_step, get_unit
 
 
 class ZigBeeController(AbstractController):
+    _ZIGBEE_STACK: ClassVar[Literal["bellows", "znp"]] = "bellows"
+
     _zigbee_device_path: str
     _zigbe_db: str
     # _application: ControllerApplication
@@ -73,6 +74,11 @@ class ZigBeeController(AbstractController):
         config = {CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path}, CONF_DATABASE: self._zigbe_db}
 
         # Starting zigbee stack
+        match self._ZIGBEE_STACK:
+            case "bellows":
+                from bellows.zigbee.application import ControllerApplication
+            case "znp":
+                from zigpy_znp.zigbee.application import ControllerApplication
         self._application = await ControllerApplication.new(config=config, auto_form=True)
         self._application.add_listener(self)
 

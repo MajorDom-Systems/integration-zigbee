@@ -14,6 +14,8 @@ from jose import jwt
 from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
+from tests.conftest import AsyncGenerator
+from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
 
 cloud_key = Paths.data.keys.cloud.read_text()
 
@@ -255,3 +257,31 @@ def async_client_ws_connect_mocked(coordinator_mocked, get_user_bearer_mocked):
                 yield ws
 
     return _connect
+
+
+# ---------------------------------------------------------------------------
+# IoT cage fixtures — real hardware control (session-scoped, optional)
+# ---------------------------------------------------------------------------
+# lab-pi5 (192.168.0.109) USB serial port map:
+#   /dev/ttyUSB0  →  1a86 CH340         = IoT Cage Arduino
+#   /dev/ttyUSB1  →  SiLabs CP2102N     = Zigbee/Thread
+#   /dev/ttyUSB2  →  SONOFF ZWave Dongle = Z-Wave controller (not used by hub yet)
+_LAB_IOT_CAGE_PORT = "/dev/ttyUSB0"
+_LAB_ZIGBEE_DEVICE_IDX = 1  # cage slot wired to the Zigbee DUT
+
+
+@pytest.fixture(scope="session")
+def zigbee_device_idx(request: pytest.FixtureRequest) -> int:
+    return int(request.config.getoption("--zigbee-device-idx") or _LAB_ZIGBEE_DEVICE_IDX)
+
+
+@pytest_asyncio.fixture(scope="session")
+async def iot_cage(request: pytest.FixtureRequest) -> AsyncGenerator[AioIotRpc]:
+    port: str = request.config.getoption("--iot-cage-port") or _LAB_IOT_CAGE_PORT
+    cage = AioIotRpc(port=port, timeout=5.0)
+    await cage.connect()
+    try:
+        yield cage
+    finally:
+        await cage.all_off()
+        await cage.close()

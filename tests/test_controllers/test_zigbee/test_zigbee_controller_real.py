@@ -1,4 +1,5 @@
 import asyncio
+import warnings
 
 import pytest
 from starlette.websockets import WebSocketDisconnect
@@ -17,13 +18,9 @@ _PARAM_ATTR_ID = "35963eae-bbb8-52f3-a7c6-6c59a4f1798d"  # LevelControl attribut
 async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
     """Device must be unpaired. We power-cycle it so it re-broadcasts and is discoverable."""
     if iot_cage is not None:
-        # Factory-reset then power-cycle to ensure device is unpaired and advertising
-        await iot_cage.factory(zigbee_device_idx)
-        await asyncio.sleep(1.0)  # give device time to reset
-        await iot_cage.power(zigbee_device_idx, False)
-        await asyncio.sleep(0.5)
-        await iot_cage.power(zigbee_device_idx, True)
-        await asyncio.sleep(2.0)  # device boot time
+        await iot_cage.factory(zigbee_device_idx)  # make sure unpaired
+    else:
+        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be reset manually")
 
     user = await crud.create_user()
 
@@ -33,7 +30,8 @@ async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, g
             r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=30", headers=get_user_bearer(user.id))
             assert r.status_code == 200, r.json()
 
-            async with asyncio.timeout(10 if iot_cage else 3):
+            async with asyncio.timeout(30):
+                # zigbee discovery might have long delay
                 while True:
                     message = await ws.receive_json()
                     if message["type"] == "majordom_did_discover_discovery":
@@ -52,7 +50,9 @@ async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, g
 @pytest.mark.asyncio
 async def test_pair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
     if iot_cage is not None:
-        await iot_cage.power(zigbee_device_idx, True)
+        await iot_cage.factory(zigbee_device_idx)  # make sure unpaired
+    else:
+        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be reset manually")
     user = await crud.create_user()
     room = await crud.create_room()
 
@@ -77,13 +77,15 @@ async def test_pair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc | N
 
 @pytest.mark.asyncio
 async def test_discovery_paired(async_client, crud, get_user_bearer):
+    # assumes device is already paired and reachable after `test_pair`
     user = await crud.create_user()
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200 and r.json() == {}, f"Sth is wrong, {r.json()}"
+    assert r.status_code == 200 and r.json() == {}, r.json()
 
 
 @pytest.mark.asyncio
 async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
+    # assumes device is already paired and reachable after `test_pair`
     """Send OnOff toggle; if cage is present, verify the sensor on the device slot changed."""
     if iot_cage is not None:
         await iot_cage.power(zigbee_device_idx, True)
@@ -119,6 +121,8 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
         events = iot_cage.get_events(zigbee_device_idx)
         assert events, f"Expected a sensor event on cage slot {zigbee_device_idx} after toggle command"
         await iot_cage.monitor(False)
+    else:
+        warnings.warn("iot_cage is None, skipping sensor event verification")
 
 
 @pytest.mark.asyncio
@@ -158,13 +162,14 @@ async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIo
         events = iot_cage.get_events(zigbee_device_idx)
         assert events, f"Expected a sensor event on cage slot {zigbee_device_idx} after attribute change"
         await iot_cage.monitor(False)
+    else:
+        warnings.warn("iot_cage is None, skipping sensor event verification")
 
 
 """
 @pytest.mark.asyncio
 async def test_events():
-    raise NotImplementedError()  # TODO: test that when an attribute is updated, the correct event is sent to majordom
-
+    raise NotImplementedError()  # TODO: test that when an attribute is updated, the correct event is sent to majordom; needs rpc for control/sensor trigger
 """
 
 
@@ -173,7 +178,3 @@ async def test_unpair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc |
     user = await crud.create_user()
     r = await async_client.delete(f"/v1/api/device/{_DEVICE_ID}", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
-
-    if iot_cage is not None:
-        # Leave device powered off so next test run starts from a clean state
-        await iot_cage.power(zigbee_device_idx, False)

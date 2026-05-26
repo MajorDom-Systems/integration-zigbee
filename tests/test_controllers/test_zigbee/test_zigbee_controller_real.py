@@ -6,7 +6,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
 
-pytestmark = pytest.mark.real_iot_device
+pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
 # Zigbee test device identifiers (paired against a real device in slot --zigbee-device-idx)
 _DEVICE_ID = "c17efe96-b199-5a9c-ae42-321121dfbe25"
@@ -170,6 +170,7 @@ async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIo
 @pytest.mark.asyncio
 async def test_events():
     raise NotImplementedError()  # TODO: test that when an attribute is updated, the correct event is sent to majordom; needs rpc for control/sensor trigger
+
 """
 
 
@@ -178,3 +179,7 @@ async def test_unpair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc |
     user = await crud.create_user()
     r = await async_client.delete(f"/v1/api/device/{_DEVICE_ID}", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
+
+    if iot_cage is not None:
+        # Leave device powered off so next test run starts from a clean state
+        await iot_cage.power(zigbee_device_idx, False)

@@ -1,6 +1,7 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
@@ -10,26 +11,27 @@ from httpx import ASGITransport, AsyncClient
 from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 from jose import jwt
+from pytest_asyncio import is_async_test
 
 from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
-from tests.conftest import AsyncGenerator
 from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
 
 cloud_key = Paths.data.keys.cloud.read_text()
 
 
-@pytest_asyncio.fixture()
-async def clear_db():
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Force all async tests in this directory to share the session event loop."""
+    session_scope_marker = pytest.mark.asyncio(loop_scope="session")
+    for item in items:
+        if is_async_test(item):
+            item.add_marker(session_scope_marker, append=False)
+
+
+@pytest.fixture(autouse=True)
+def clear_db():
     pass
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="session")
@@ -38,7 +40,7 @@ def credentials_repo_mock_zb():
         yield
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def cloud_service_mock_zb():
     with (
         patch("majordom_hub.coordinator.CloudService.start", new_callable=AsyncMock),
@@ -48,7 +50,7 @@ async def cloud_service_mock_zb():
         yield mock
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb):
     with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
         c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"}))
@@ -57,7 +59,7 @@ async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb):
         await c.stop()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def async_client(coordinator):
     async with AsyncClient(transport=ASGITransport(app=coordinator.server_service.app), base_url="http://testserver") as client:
         yield client
@@ -188,7 +190,7 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
             del self.devices[ieee]
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb):
     mock_app: list[_MockZigpyApp] = []
 
@@ -200,7 +202,7 @@ async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb):
 
     with (
         patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock),
-        patch("majordom_hub.services.controller.zigbee.controller.ControllerApplication.new", side_effect=_new),
+        patch("bellows.zigbee.application.ControllerApplication.new", side_effect=_new),
         patch("zigpy.zcl.Cluster.read_attributes", new_callable=AsyncMock, return_value=({}, {})),
         patch("zigpy.zcl.Cluster.write_attributes", new_callable=AsyncMock, return_value=[{}, {}]),
         patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
@@ -230,7 +232,7 @@ async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb):
         await c.stop()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def async_client_mocked(coordinator_mocked):
     async with AsyncClient(transport=ASGITransport(app=coordinator_mocked.server_service.app), base_url="http://testserver") as client:
         yield client
@@ -260,28 +262,32 @@ def async_client_ws_connect_mocked(coordinator_mocked, get_user_bearer_mocked):
 
 
 # ---------------------------------------------------------------------------
-# IoT cage fixtures — real hardware control (session-scoped, optional)
+# IoT cage fixtures — real hardware control
 # ---------------------------------------------------------------------------
 # lab-pi5 (192.168.0.109) USB serial port map:
 #   /dev/ttyUSB0  →  1a86 CH340         = IoT Cage Arduino
-#   /dev/ttyUSB1  →  SiLabs CP2102N     = Zigbee/Thread
+#   /dev/ttyUSB1  →  SiLabs CP2102N     = Home Assistant SkyConnect (Zigbee/Thread)
 #   /dev/ttyUSB2  →  SONOFF ZWave Dongle = Z-Wave controller (not used by hub yet)
 _LAB_IOT_CAGE_PORT = "/dev/ttyUSB0"
-_LAB_ZIGBEE_DEVICE_IDX = 1  # cage slot wired to the Zigbee DUT
+_LAB_ZIGBEE_DEVICE_IDX = 0  # cage slot wired to the Zigbee DUT
 
 
 @pytest.fixture(scope="session")
 def zigbee_device_idx(request: pytest.FixtureRequest) -> int:
-    return int(request.config.getoption("--zigbee-device-idx") or _LAB_ZIGBEE_DEVICE_IDX)
+    v = request.config.getoption("--zigbee-device-idx")
+    return int(v) if v is not None else _LAB_ZIGBEE_DEVICE_IDX
 
 
-@pytest_asyncio.fixture(scope="session")
-async def iot_cage(request: pytest.FixtureRequest) -> AsyncGenerator[AioIotRpc]:
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def iot_cage(request: pytest.FixtureRequest) -> AsyncGenerator[AioIotRpc, None]:
     port: str = request.config.getoption("--iot-cage-port") or _LAB_IOT_CAGE_PORT
-    cage = AioIotRpc(port=port, timeout=5.0)
+    cage = AioIotRpc(port=port, timeout=8.0)
     await cage.connect()
     try:
         yield cage
     finally:
-        await cage.all_off()
+        try:
+            await cage.all_off()
+        except Exception:
+            pass
         await cage.close()

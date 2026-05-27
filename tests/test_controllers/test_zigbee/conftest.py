@@ -50,8 +50,18 @@ async def cloud_service_mock_zb():
         yield mock
 
 
+@pytest.fixture(scope="session")
+def clear_zigbee_db():
+    """Delete the zigbee device DB (+ WAL/SHM) before the real-hardware test session."""
+    db = Paths.data.integrations.named("zigbee") / "zigbee.db"
+    for suffix in ("", "-wal", "-shm"):
+        p = db.parent / (db.name + suffix)
+        if p.exists():
+            p.unlink()
+
+
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb):
+async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb, clear_zigbee_db):
     with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
         c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"}))
         await c.start(wait_forever=False)
@@ -266,7 +276,7 @@ def async_client_ws_connect_mocked(coordinator_mocked, get_user_bearer_mocked):
 # ---------------------------------------------------------------------------
 # lab-pi5 (192.168.0.109) USB serial port map:
 #   /dev/ttyUSB0  →  1a86 CH340         = IoT Cage Arduino
-#   /dev/ttyUSB1  →  SiLabs CP2102N     = Home Assistant SkyConnect (Zigbee/Thread)
+#   /dev/ttyUSB1  →  SiLabs CP2102N     = Zigbee/Thread
 #   /dev/ttyUSB2  →  SONOFF ZWave Dongle = Z-Wave controller (not used by hub yet)
 _LAB_IOT_CAGE_PORT = "/dev/ttyUSB0"
 _LAB_ZIGBEE_DEVICE_IDX = 0  # cage slot wired to the Zigbee DUT

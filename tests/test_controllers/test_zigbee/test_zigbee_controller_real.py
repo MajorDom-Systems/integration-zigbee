@@ -14,8 +14,8 @@ _PARAM_ATTR_ID = "35963eae-bbb8-52f3-a7c6-6c59a4f1798d"  # LevelControl attribut
 
 
 @pytest.mark.asyncio
-async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer):
-    """Power on the device and wait for boot reset, then open pairing window."""
+async def test_discovery_and_pairing(async_client, async_client_ws_connect, crud, get_user_bearer):
+    """Zigbee specifics: no separate discovery step, under the hood it pairs right away."""
 
     user = await crud.create_user()
 
@@ -35,10 +35,6 @@ async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, g
     assert r.status_code == 200, r.json()
     assert _DEVICE_ID in r.json(), r.json()
 
-
-@pytest.mark.asyncio
-async def test_pair(async_client, crud, get_user_bearer):
-    user = await crud.create_user()
     room = await crud.create_room()
 
     data = {

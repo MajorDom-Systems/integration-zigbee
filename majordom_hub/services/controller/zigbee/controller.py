@@ -9,6 +9,7 @@ from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
+from zigpy.zcl.foundation import Status as ZCLStatus
 from zigpy.zcl.foundation import ZCLAttributeAccess
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
@@ -235,6 +236,9 @@ class ZigBeeController(AbstractController):
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
                     for attribute_id, attribute in cluster.attributes.items():
+                        if attribute_id in cluster.unsupported_attributes:
+                            continue
+
                         value = b""
 
                         visibility = ParameterVisibility.system
@@ -247,9 +251,29 @@ class ZigBeeController(AbstractController):
                                 visibility = ParameterVisibility.setting
 
                         if attribute.access & ZCLAttributeAccess.Read:
-                            values, failures = await cluster.read_attributes([attribute_id])
+                            try:
+                                if attribute_id in cluster._attr_cache:
+                                    values, failures = await cluster.read_attributes([attribute_id], only_cache=True)
+                                else:
+                                    values, failures = await cluster.read_attributes([attribute_id])
+                            except Exception as e:
+                                log.error(
+                                    f"[PAIR] read_attribute failed endpoint={endpoint.endpoint_id} cluster={cluster.cluster_id} attr={attribute_id} error={type(e).__name__} {'details=' + str(e) if str(e) else ''}"
+                                )
+                                continue
                             if failures:
-                                logging.error(failures)
+                                remaining = dict(failures)
+                                for attr_id, status in failures.items():
+                                    if status == ZCLStatus.UNSUPPORTED_ATTRIBUTE:
+                                        cluster.add_unsupported_attribute(attr_id)
+                                        log.debug(
+                                            f"[PAIR] UNSUPPORTED_ATTRIBUTE endpoint={endpoint.endpoint_id} cluster={cluster.cluster_id} attr={attr_id}"
+                                        )
+                                        del remaining[attr_id]
+                                if remaining:
+                                    log.error(
+                                        f"[PAIR] read_attribute failed endpoint={endpoint.endpoint_id} cluster={cluster.cluster_id} attr={attribute_id} remaining={remaining}"
+                                    )
                             else:
                                 temp = values.get(attribute_id)
                                 if temp is not None:

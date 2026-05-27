@@ -13,6 +13,8 @@ from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
 from jose import jwt
 from pytest_asyncio import is_async_test
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from starlette.websockets import WebSocketDisconnect
 
 from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
@@ -38,6 +40,27 @@ def clear_db():
 
 
 @pytest.fixture(scope="session")
+def clear_majordom_db():
+    """Drop and recreate the majordom DB schema once before the session."""
+    from majordom_hub import models
+
+    db_url = "sqlite:///" + str(Paths.data.db)
+    engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    for i in range(5):
+        try:
+            models.Base.metadata.drop_all(bind=engine)
+            break
+        except OperationalError as e:
+            if "database is locked" in str(e):
+                time.sleep(0.1)
+            else:
+                raise
+    else:
+        raise RuntimeError("Stalled database session")
+    models.Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture(scope="session")
 def credentials_repo_mock_zb():
     with patch("majordom_hub.repository.credentials_repository.CredentialsRepository._write_file", new_callable=Mock):
         yield
@@ -54,7 +77,7 @@ async def cloud_service_mock_zb():
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb, clear_zigbee_db, power_on_and_settle):
+async def coordinator(cloud_service_mock_zb, credentials_repo_mock_zb, clear_zigbee_db, clear_majordom_db, power_on_and_settle):
     with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
         c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"}))
         await c.start(wait_forever=False)

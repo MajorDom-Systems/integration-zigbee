@@ -8,7 +8,7 @@ from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
 pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
 # Zigbee test device identifiers (paired against a real device in slot --zigbee-device-idx)
-_DEVICE_ID = "c17efe96-b199-5a9c-ae42-321121dfbe25"
+_DEVICE_ID = "d478e32a-cbb7-51bc-9ba0-0cd746b873a8"
 _PARAM_COMMAND_ID = "6063563a-9c00-506c-8616-9e1b45576c71"  # OnOff toggle command
 _PARAM_ATTR_ID = "35963eae-bbb8-52f3-a7c6-6c59a4f1798d"  # LevelControl attribute
 

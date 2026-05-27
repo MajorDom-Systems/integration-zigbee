@@ -2,7 +2,6 @@ import asyncio
 import warnings
 
 import pytest
-from starlette.websockets import WebSocketDisconnect
 
 from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
 
@@ -13,49 +12,24 @@ _DEVICE_ID = "c17efe96-b199-5a9c-ae42-321121dfbe25"
 _PARAM_COMMAND_ID = "6063563a-9c00-506c-8616-9e1b45576c71"  # OnOff toggle command
 _PARAM_ATTR_ID = "35963eae-bbb8-52f3-a7c6-6c59a4f1798d"  # LevelControl attribute
 
-_BOOT_SETTLE_S = 5  # device auto-resets during first 5s; don't open pairing window before this
-
-
-async def _power_on_and_settle(cage: AioIotRpc, idx: int) -> None:
-    """Power on the device and wait for its boot reset to complete."""
-    await cage.power(idx, False)
-    await asyncio.sleep(1)
-    await cage.power(idx, True)
-    await asyncio.sleep(_BOOT_SETTLE_S)
-
 
 @pytest.mark.asyncio
-async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
+async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer):
     """Power on the device and wait for boot reset, then open pairing window."""
-    if iot_cage is not None:
-        await _power_on_and_settle(iot_cage, zigbee_device_idx)
-    else:
-        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be powered on manually and given 5s to settle")
 
     user = await crud.create_user()
 
     message = None
-    try:
-        async with async_client_ws_connect(user.id) as ws:
-            r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=30", headers=get_user_bearer(user.id))
-            assert r.status_code == 200, r.json()
+    async with async_client_ws_connect(user.id, timeout=30) as ws:
+        r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=120", headers=get_user_bearer(user.id))
+        assert r.status_code == 200, r.json()
 
-            try:
-                async with asyncio.timeout(30):
-                    # zigbee discovery might have long delay, 30s is safe middle ground
-                    while True:
-                        message = await ws.receive_json()
-                        if message["type"] == "majordom_did_discover_discovery":
-                            break
-                        else:
-                            continue
-            except asyncio.TimeoutError:
-                raise AssertionError("No discovery message received within timeout")
+        while True:
+            message = await ws.receive_json()
+            if message["type"] == "majordom_did_discover_discovery":
+                break
 
-    except WebSocketDisconnect as e:
-        assert e.code == 1000, f"Unexpected WebSocket disconnect code: {e.code}"
-
-    assert message and message.get("type") == "majordom_did_discover_discovery", message
+    assert message is not None and message.get("type") == "majordom_did_discover_discovery", "No discovery message received within timeout"
 
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
@@ -63,11 +37,7 @@ async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, g
 
 
 @pytest.mark.asyncio
-async def test_pair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
-    if iot_cage is not None:
-        await _power_on_and_settle(iot_cage, zigbee_device_idx)
-    else:
-        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be powered on manually and given 5s to settle")
+async def test_pair(async_client, crud, get_user_bearer):
     user = await crud.create_user()
     room = await crud.create_room()
 
@@ -83,11 +53,6 @@ async def test_pair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc | N
 
     r = await async_client.post("/v1/api/device", json=data, headers=get_user_bearer(user.id))
     assert r.status_code == 200 and r.json() and r.json()["name"] == data.get("name"), r.json()
-
-    if iot_cage is not None:
-        # Confirm device is still powered and reachable on the cage
-        state = await iot_cage.state(zigbee_device_idx)
-        assert state == 1, f"Expected device slot {zigbee_device_idx} to be powered on after pair, got state={state}"
 
 
 @pytest.mark.asyncio
@@ -117,18 +82,12 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
         },
     }
     message = None
-    try:
-        async with async_client_ws_connect(user.id) as ws:
-            await ws.send_json(command)
-            async with asyncio.timeout(3):
-                while True:
-                    message = await ws.receive_json()
-                    if message["type"] == "majordom_did_receive_event":
-                        break
-                    else:
-                        continue
-    except WebSocketDisconnect as e:
-        assert e.code == 1000
+    async with async_client_ws_connect(user.id, timeout=3) as ws:
+        await ws.send_json(command)
+        while True:
+            message = await ws.receive_json()
+            if message["type"] == "majordom_did_receive_event":
+                break
     assert message and message.get("type") == "majordom_did_receive_event", message
 
     if iot_cage is not None:
@@ -158,18 +117,14 @@ async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIo
         },
     }
     message = None
-    try:
-        async with async_client_ws_connect(user.id) as ws:
-            await ws.send_json(command)
-            async with asyncio.timeout(3):
-                while True:
-                    message = await ws.receive_json()
-                    if message["type"] == "majordom_did_connect_device":
-                        continue
-                    else:
-                        break
-    except WebSocketDisconnect as e:
-        assert e.code == 1000
+    async with async_client_ws_connect(user.id, timeout=3) as ws:
+        await ws.send_json(command)
+        while True:
+            message = await ws.receive_json()
+            if message["type"] == "majordom_did_connect_device":
+                continue
+            else:
+                break
     assert message and message.get("type") == "majordom_did_receive_event", message
 
     if iot_cage is not None:

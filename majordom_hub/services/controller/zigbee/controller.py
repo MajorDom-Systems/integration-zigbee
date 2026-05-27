@@ -33,6 +33,8 @@ from .model import (
 )
 from .zigbee_spec import SYSTEM_CLUSTERS, get_min_step, get_unit
 
+log = logging.getLogger(__name__)
+
 
 class ZigBeeController(AbstractController):
     _ZIGBEE_STACK: ClassVar[Literal["bellows", "znp"]] = "bellows"
@@ -72,6 +74,7 @@ class ZigBeeController(AbstractController):
     async def start(self):
         self._zigbee_device_path = self.dependencies.hardware_interfaces[0]
         self._zigbe_db = str(self.documents_folder / "zigbee.db")
+        log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
         config = {CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path}, CONF_DATABASE: self._zigbe_db}
 
         # Starting zigbee stack
@@ -91,6 +94,7 @@ class ZigBeeController(AbstractController):
                 raise PermissionError(msg) from e
             raise
         self._application.add_listener(self)
+        log.debug("[READY] connected to %s", self._zigbee_device_path)
 
         async with self.dependencies.make_device_repository() as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices
@@ -102,9 +106,11 @@ class ZigBeeController(AbstractController):
                 if await device_repo.get(device_id, ZBDevice):
                     self._connected_devices[device_id] = zbdevice
                     await self._subscribe(device_id, zbdevice)
+                    log.debug("[KNOWN] ieee=%s  nwk=0x%04X", zbdevice.ieee, zbdevice.nwk)
                 else:
                     self._create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
                     await zbdevice.initialize()
+                    log.debug("[UNKNOWN] ieee=%s  nwk=0x%04X — not in DB, starting disconnect timer", zbdevice.ieee, zbdevice.nwk)
 
             # Checking if all devices in our system are still connected to ZigBee
             for device in await device_repo.get_all(self.name, ZBDevice):
@@ -116,6 +122,7 @@ class ZigBeeController(AbstractController):
                 await device_repo.save(device, device.id)
 
     async def stop(self):
+        log.debug("[STOP] shutting down")
         for task in self._tasks:
             task.cancel()
         if self._tasks:
@@ -130,6 +137,7 @@ class ZigBeeController(AbstractController):
     async def start_pairing_window(self, seconds: int) -> None:
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
+        log.debug("[PERMIT-JOIN] opening for %ds", seconds)
         await self._application.permit(seconds)
 
     async def fetch(self, device: ZBDevice) -> None:
@@ -346,6 +354,7 @@ class ZigBeeController(AbstractController):
     async def unpair(self, device: ZBDevice):
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
+        log.debug("[UNPAIR] ieee=%s", device.integration_data.ieee)
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.create_uuid_id(device.integration_data.ieee))
 
@@ -355,6 +364,7 @@ class ZigBeeController(AbstractController):
         """
         Called only after the device is joined to ZigBee network(after start_pairing_window).
         """
+        log.debug("[JOIN] ieee=%s  nwk=0x%04X", device.ieee, device.nwk)
         discovery_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(device.ieee))
         # Zigbee doesn't have discovery. All devices are connected to the network automatically after opening the network.
         # We keep them in the waiting list until they are paired in majordom, then we move them to the connected list.
@@ -365,6 +375,7 @@ class ZigBeeController(AbstractController):
         """
         Called only after the device is fully initialized in a ZigBee network.
         """
+        log.debug("[INIT] ieee=%s  nwk=0x%04X  model=%r  manufacturer=%r", device.ieee, device.nwk, device.model, device.manufacturer)
         discovery_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(device.ieee))
         if discovery_id in self.discoveries:
             self._create_task(self._subscribe(discovery_id, device))
@@ -383,7 +394,7 @@ class ZigBeeController(AbstractController):
 
         self._majordom_discoveries[discovery_id] = discovery
         self._awaiting_zb_discoveries[discovery_id] = device
-
+        log.debug("[DISCOVERY] ieee=%s  discovery_id=%s", device.ieee, discovery_id)
         self._create_task(self.dependencies.output.controller_did_receive_discovery(self, discovery))
 
         # TODO: listen for "left", "disconnected", "stopped", etc

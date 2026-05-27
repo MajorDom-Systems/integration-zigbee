@@ -1,9 +1,11 @@
 import asyncio
 import warnings
+from pathlib import Path
 
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
+from majordom_hub.providers.paths import Paths
 from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
 
 pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
@@ -13,14 +15,34 @@ _DEVICE_ID = "c17efe96-b199-5a9c-ae42-321121dfbe25"
 _PARAM_COMMAND_ID = "6063563a-9c00-506c-8616-9e1b45576c71"  # OnOff toggle command
 _PARAM_ATTR_ID = "35963eae-bbb8-52f3-a7c6-6c59a4f1798d"  # LevelControl attribute
 
+_ZIGBEE_DB = Paths.data.integrations.named("zigbee") / "zigbee.db"
+_BOOT_SETTLE_S = 5  # device auto-resets during first 5s; don't open pairing window before this
+
+
+@pytest.fixture(scope="session", autouse=True)
+def clear_zigbee_db():
+    """Delete the zigbee device DB (+ WAL/SHM) before the real-hardware test session."""
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(_ZIGBEE_DB) + suffix)
+        if p.exists():
+            p.unlink()
+
+
+async def _power_on_and_settle(cage: AioIotRpc, idx: int) -> None:
+    """Power on the device and wait for its boot reset to complete."""
+    await cage.power(idx, False)
+    await asyncio.sleep(0.5)
+    await cage.power(idx, True)
+    await asyncio.sleep(_BOOT_SETTLE_S)
+
 
 @pytest.mark.asyncio
 async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
-    """Device must be unpaired. We power-cycle it so it re-broadcasts and is discoverable."""
+    """Power on the device and wait for boot reset, then open pairing window."""
     if iot_cage is not None:
-        await iot_cage.factory(zigbee_device_idx)  # make sure unpaired
+        await _power_on_and_settle(iot_cage, zigbee_device_idx)
     else:
-        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be reset manually")
+        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be powered on manually and given 5s to settle")
 
     user = await crud.create_user()
 
@@ -50,9 +72,9 @@ async def test_discovery_unpaired(async_client, async_client_ws_connect, crud, g
 @pytest.mark.asyncio
 async def test_pair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
     if iot_cage is not None:
-        await iot_cage.factory(zigbee_device_idx)  # make sure unpaired
+        await _power_on_and_settle(iot_cage, zigbee_device_idx)
     else:
-        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be reset manually")
+        warnings.warn("iot_cage is None, skipping power-cycle; device needs to be powered on manually and given 5s to settle")
     user = await crud.create_user()
     room = await crud.create_room()
 

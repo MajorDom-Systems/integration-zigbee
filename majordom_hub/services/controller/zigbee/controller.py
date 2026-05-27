@@ -16,6 +16,7 @@ from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery, NonEmptyStr
 from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
+from majordom_hub.utils.serial import port_holder
 
 from .exceptions import ZBConnectionError, ZBUnexpectedError
 from .listener import ZBAttributeUpdatedListener
@@ -79,7 +80,16 @@ class ZigBeeController(AbstractController):
                 from bellows.zigbee.application import ControllerApplication
             case "znp":
                 from zigpy_znp.zigbee.application import ControllerApplication
-        self._application = await ControllerApplication.new(config=config, auto_form=True)
+        try:
+            self._application = await ControllerApplication.new(config=config, auto_form=True)
+        except Exception as e:
+            if "locked" in str(e).lower() or "permission" in str(e).lower():
+                holder = port_holder(self._zigbee_device_path)
+                msg = f"{self._zigbee_device_path} is locked"
+                if holder:
+                    msg += f" by: {holder}"
+                raise PermissionError(msg) from e
+            raise
         self._application.add_listener(self)
 
         async with self.dependencies.make_device_repository() as device_repo:

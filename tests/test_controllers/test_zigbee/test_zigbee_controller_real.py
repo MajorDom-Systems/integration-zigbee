@@ -51,8 +51,15 @@ async def test_discovery_and_pairing(async_client, async_client_ws_connect, crud
         "credentials": None,
     }
 
-    r = await async_client.post("/v1/api/device", json=data, headers=get_user_bearer(user.id))
-    assert r.status_code == 200 and r.json() and r.json()["name"] == data.get("name"), r.json()
+    async with async_client_ws_connect(user.id, timeout=60) as ws:
+        r = await async_client.post("/v1/api/device", json=data, headers=get_user_bearer(user.id))
+        assert r.status_code == 200 and r.json() and r.json()["name"] == data.get("name"), r.json()
+        # fetch runs in background after pairing; wait for connect signal
+        while True:
+            message = await ws.receive_json()
+            if message["type"] == "majordom_did_connect_device":
+                break
+    assert message["data"] == _DEVICE_ID
 
 
 @pytest.mark.asyncio

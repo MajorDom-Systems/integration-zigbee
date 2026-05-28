@@ -70,14 +70,10 @@ def _zb_path(
         attr_name = getattr(cluster.attributes.get(attr_id) if cluster else None, "name", None)
         parts.append(f"attr={attr_id}" + (f"({attr_name})" if attr_name else ""))
     if error is not None:
-        parts.append(
-            f"error={type(error).__name__}{' details=' + str(error) if str(error) else ''}"
-        )
+        parts.append(f"error={type(error).__name__}{' details=' + str(error) if str(error) else ''}")
     if attr_ids is not None:
         attr_ids = sorted(attr_ids)
-        names = [
-            getattr(cluster.attributes.get(a) if cluster else None, "name", None) for a in attr_ids
-        ]
+        names = [getattr(cluster.attributes.get(a) if cluster else None, "name", None) for a in attr_ids]
         long = len(names) > 1
         glue = ",\n\t" if long else " "
         parts.append(
@@ -207,9 +203,7 @@ class ZigBeeController(AbstractController):
             for zbdevice in self._application.devices.values():
                 if zbdevice.nwk == 0x0000:
                     continue
-                device_id = self._mapper.create_uuid_id(
-                    self._mapper.convert_eui64_to_str(zbdevice.ieee)
-                )
+                device_id = self._mapper.create_uuid_id(self._mapper.convert_eui64_to_str(zbdevice.ieee))
                 if await device_repo.get(device_id, ZBDevice):
                     self._connected_devices[device_id] = zbdevice
                     await self._subscribe(device_id, zbdevice)
@@ -229,9 +223,7 @@ class ZigBeeController(AbstractController):
                 if self._application.get_device(ieee):
                     continue
                 device.available = False
-                device.last_error = (
-                    f"Device {device.name} is no longer connected to the ZigBee network"
-                )
+                device.last_error = f"Device {device.name} is no longer connected to the ZigBee network"
                 await device_repo.save(device, device.id)
 
     async def stop(self):
@@ -264,15 +256,15 @@ class ZigBeeController(AbstractController):
         if not zbdevice.is_initialized:
             raise ZBUnexpectedError(f"Device {ieee} is not initialized")
         events: list[DeviceParameterChangedEvent] = list()
+        log.debug("[FETCH] start device=%s(%s)", device.id, zbdevice.model)
+        t0 = asyncio.get_event_loop().time()
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
                 readable_ids = [
-                    attr_id
-                    for attr_id in cluster.attributes.keys()
-                    if attr_id not in cluster.unsupported_attributes
+                    attr_id for attr_id in cluster.attributes.keys() if attr_id not in cluster.unsupported_attributes
                 ]
                 attr_values = await self._read_cluster_attributes(
-                    device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]"
+                    device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]", timeout=2
                 )
 
                 for attribute_id in cluster.attributes.keys():
@@ -287,17 +279,20 @@ class ZigBeeController(AbstractController):
                             value=attr_values.get(attribute_id),
                         )
                     )
-                for command_id in cluster.commands.keys():
+                for command in cluster.commands:
                     events.append(
                         DeviceParameterChangedEvent(
                             device_id=device.id,
                             parameter_id=self._mapper.create_uuid_id(
-                                f"{device.id}_command_{endpoint.endpoint_id}/{cluster_id}/{command_id}"
+                                f"{device.id}_command_{endpoint.endpoint_id}/{cluster_id}/{command.id}"
                             ),
                             value=None,
                         )
                     )
 
+        log.debug(
+            "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
+        )
         await self.dependencies.output.controller_did_receive_device_events(self, events)
 
     async def identify(self, device: ZBDevice):
@@ -348,9 +343,7 @@ class ZigBeeController(AbstractController):
                 zbdevice=zbdevice,
                 endpoint=endpoint,
             )
-            log.info(
-                f"[CMD] write_attr ibutes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}"
-            )
+            log.info(f"[CMD] write_attr ibutes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}")
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
@@ -385,37 +378,10 @@ class ZigBeeController(AbstractController):
             assert zbdevice
 
             if not device.integration_data.ieee:
-                device.integration_data = ZBDeviceIntegrationData(
-                    ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee)
-                )
+                device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
             parameters: list[ZBParameterState] = list()
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
-                    readable_ids = [
-                        attr_id
-                        for attr_id, attr in cluster.attributes.items()
-                        if attr.access & ZCLAttributeAccess.Read
-                        and attr_id not in cluster.unsupported_attributes
-                    ]
-
-                    cached_ids = [a for a in readable_ids if a in cluster._attr_cache]
-                    live_ids = [a for a in readable_ids if a not in cluster._attr_cache]
-                    attr_values = await self._read_cluster_attributes(
-                        device,
-                        zbdevice,
-                        endpoint,
-                        cluster,
-                        cached_ids,
-                        only_cache=True,
-                        log_prefix="[PAIR]",
-                    )
-                    attr_values |= await self._read_cluster_attributes(
-                        device, zbdevice, endpoint, cluster, live_ids, log_prefix="[PAIR]"
-                    )
-                    await asyncio.sleep(
-                        0.02
-                    )  # pace cluster reads; prevents NCP ACK timeout under bulk load
-
                     for attribute_id, attribute in cluster.attributes.items():
                         if attribute_id in cluster.unsupported_attributes:
                             continue
@@ -431,11 +397,6 @@ class ZigBeeController(AbstractController):
                             elif attribute.access & ZCLAttributeAccess.Write:
                                 visibility = ParameterVisibility.setting
 
-                        if attribute.access & ZCLAttributeAccess.Read:
-                            raw = attr_values.get(attribute_id)
-                            if raw is not None:
-                                value = attribute.type(raw).serialize()
-
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
                         min_value = None
                         max_value = None
@@ -449,9 +410,7 @@ class ZigBeeController(AbstractController):
                             max_value = attribute.type.max_value
 
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
-                            valid_values = {
-                                member.name: str(member.value) for member in attribute.type
-                            }
+                            valid_values = {member.name: str(member.value) for member in attribute.type}
 
                         parameters.append(
                             ZBParameterState(
@@ -493,9 +452,7 @@ class ZigBeeController(AbstractController):
                             if hasattr(field.type, "max_value"):
                                 max_value = field.type.max_value
                             if isinstance(field.type, type) and issubclass(field.type, Enum):
-                                valid_values = {
-                                    member.name: str(member.value) for member in field.type
-                                }
+                                valid_values = {member.name: str(member.value) for member in field.type}
 
                             fields.append(
                                 Parameter(
@@ -520,9 +477,7 @@ class ZigBeeController(AbstractController):
                                 name=command.name,
                                 data_type=ParameterDataType.none,
                                 role=ParameterRole.control,
-                                fields=json.loads(
-                                    json.dumps([f.model_dump(mode="json") for f in fields])
-                                )
+                                fields=json.loads(json.dumps([f.model_dump(mode="json") for f in fields]))
                                 if fields
                                 else None,
                                 visibility=visibility,
@@ -545,15 +500,20 @@ class ZigBeeController(AbstractController):
                 ),
             )
             await device_repository.save(device, discovery.id)
-            await self.dependencies.output.controller_did_connect_device(self, discovery.id)
+            # fetch runs in background; controller_did_connect_device fires after fetch completes
+            self._create_task(self._fetch_after_pair(device, zbdevice))
+
+    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice) -> None:
+        log.debug("[PAIR] starting background fetch device=%s(%s)", device.id, zbdevice.model)
+        await self.fetch(device)
+        await self.dependencies.output.controller_did_connect_device(self, device.id)
+        log.debug("[PAIR] background fetch done, device connected device=%s(%s)", device.id, zbdevice.model)
 
     async def unpair(self, device: ZBDevice):
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
         log.debug("[UNPAIR] ieee=%s", device.integration_data.ieee)
-        await self._application.remove(
-            self._mapper.convert_str_to_eui64(device.integration_data.ieee)
-        )
+        await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.create_uuid_id(device.integration_data.ieee))
 
     # ZigBee Listener:
@@ -599,9 +559,7 @@ class ZigBeeController(AbstractController):
         self._majordom_discoveries[discovery_id] = discovery
         self._awaiting_zb_discoveries[discovery_id] = device
         log.debug("[DISCOVERY] ieee=%s  discovery_id=%s", device.ieee, discovery_id)
-        self._create_task(
-            self.dependencies.output.controller_did_receive_discovery(self, discovery)
-        )
+        self._create_task(self.dependencies.output.controller_did_receive_discovery(self, discovery))
 
         # TODO: listen for "left", "disconnected", "stopped", etc
 
@@ -617,14 +575,13 @@ class ZigBeeController(AbstractController):
         *,
         only_cache: bool = False,
         log_prefix: str = "[READ]",
+        timeout: float | None = None,
     ) -> dict[int, object]:
         attr_values: dict[int, object] = {}
-        chunks = [
-            ids[i : i + _MAX_ATTRS_PER_REQUEST] for i in range(0, len(ids), _MAX_ATTRS_PER_REQUEST)
-        ]
+        chunks = [ids[i : i + _MAX_ATTRS_PER_REQUEST] for i in range(0, len(ids), _MAX_ATTRS_PER_REQUEST)]
         for chunk in chunks:
             try:
-                values, failures = await cluster.read_attributes(chunk, only_cache=only_cache)
+                values, failures = await cluster.read_attributes(chunk, only_cache=only_cache, timeout=timeout)
             except Exception as e:
                 log.error(
                     f"{log_prefix} read_attributes error {_zb_path(device, zbdevice, endpoint, cluster, attr_ids=chunk, error=e)}"
@@ -658,10 +615,7 @@ class ZigBeeController(AbstractController):
 
     async def _disconnect_unpaired_discovery(self, discovery_id: UUID, ieee: EUI64):
         await asyncio.sleep(300)  # 5 minutes
-        if (
-            discovery_id not in self._majordom_discoveries
-            and discovery_id in self._connected_devices
-        ):
+        if discovery_id not in self._majordom_discoveries and discovery_id in self._connected_devices:
             # if the device was connected
             return
         await self._application.remove(ieee)
@@ -671,32 +625,18 @@ class ZigBeeController(AbstractController):
     def _get_device_main_parameter(self, device_id: UUID, zbdevice: ZPDevice) -> UUID | None:
         for endpoint in zbdevice.non_zdo_endpoints:
             if endpoint.in_clusters.get(0x0006):  # OnOff
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/6/2"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/6/2")
             if endpoint.in_clusters.get(0x0008):  # LevelControl
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/8/0"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/8/0")
             if endpoint.in_clusters.get(0x0300):  # ColorControl
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/300/7"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/300/7")
             if endpoint.in_clusters.get(0x0102):  # WindowCovering
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/102/8"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/102/8")
             if endpoint.in_clusters.get(0x0201):  # Termostat
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/201/18"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/201/18")
             if endpoint.in_clusters.get(0x0202):  # FanContorl
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/202/0"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/202/0")
             if endpoint.in_clusters.get(0x0101):  # LockState
-                return self._mapper.create_uuid_id(
-                    f"{device_id}_command_{endpoint.endpoint_id}/101/0"
-                )
+                return self._mapper.create_uuid_id(f"{device_id}_command_{endpoint.endpoint_id}/101/0")
 
         return None

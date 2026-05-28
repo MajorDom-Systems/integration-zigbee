@@ -5,6 +5,8 @@ from enum import Enum
 from typing import ClassVar, Literal, Type, override
 from uuid import UUID
 
+import zigpy.endpoint
+import zigpy.zcl
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
@@ -35,6 +37,39 @@ from .model import (
 from .zigbee_spec import SYSTEM_CLUSTERS, get_min_step, get_unit
 
 log = logging.getLogger(__name__)
+
+
+def _zb_path(
+    device: ZBDevice | None = None,
+    zbdevice: ZPDevice | None = None,
+    endpoint: zigpy.endpoint.Endpoint | None = None,
+    cluster: zigpy.zcl.Cluster | None = None,
+    attr_id: int | None = None,
+    attr_ids: list[int] | None = None,
+    error: Exception | None = None,
+    attr_only: bool = False,
+) -> str:
+    parts: list[str] = []
+    if device is not None:
+        model = zbdevice.model if zbdevice is not None else None
+        parts.append(f"device={device.id}" + (f"({model})" if model else ""))
+    if endpoint is not None:
+        ep_type = getattr(endpoint.device_type, "name", None)
+        parts.append(f"endpoint={endpoint.endpoint_id}" + (f"({ep_type})" if ep_type else ""))
+    if cluster is not None and not attr_only:
+        parts.append(f"cluster={cluster.cluster_id}({cluster.name})")
+    if attr_id is not None:
+        attr_name = getattr(cluster.attributes.get(attr_id) if cluster else None, "name", None)
+        parts.append(f"attr={attr_id}" + (f"({attr_name})" if attr_name else ""))
+    if error is not None:
+        parts.append(f"error={type(error).__name__}{' details=' + str(error) if str(error) else ''}")
+    if attr_ids is not None:
+        attr_ids = sorted(attr_ids)
+        names = [getattr(cluster.attributes.get(a) if cluster else None, "name", None) for a in attr_ids]
+        long = len(names) > 1
+        glue = ",\n\t" if long else " "
+        parts.append(f"attrs={'\n\t' if long else ''}{glue.join(f'{a}({n})' if n else str(a) for a, n in zip(attr_ids, names))}")
+    return " ".join(parts)
 
 
 class ZigBeeController(AbstractController):
@@ -135,11 +170,11 @@ class ZigBeeController(AbstractController):
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
 
-    async def start_pairing_window(self, seconds: int) -> None:
+    async def start_pairing_window(self, duration_sec: int) -> None:
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
-        log.debug("[PERMIT-JOIN] opening for %ds", seconds)
-        await self._application.permit(seconds)
+        log.debug("[PERMIT-JOIN] opening for %ds", duration_sec)
+        await self._application.permit(duration_sec)
 
     async def fetch(self, device: ZBDevice) -> None:
         if not self._application:
@@ -154,25 +189,45 @@ class ZigBeeController(AbstractController):
         events: list[DeviceParameterChangedEvent] = list()
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
-                for attribute_id in cluster.attributes.keys():
-                    values, failures = await cluster.read_attributes([attribute_id])
-                    if failures:
-                        value = None
-                        logging.error(failures)
+                readable_ids = [attr_id for attr_id in cluster.attributes.keys() if attr_id not in cluster.unsupported_attributes]
+                attr_values: dict[int, object] = {}
+                if readable_ids:
+                    try:
+                        values, failures = await cluster.read_attributes(readable_ids)
+                    except Exception as e:
+                        log.error(f"[FETCH] read_attributes error {_zb_path(device, zbdevice, endpoint, cluster, error=e)}")
                     else:
-                        value = values.get(attribute_id)
+                        attr_values.update(values)
+                        failed = [
+                            _zb_path(device, zbdevice, endpoint, cluster, attr_id)
+                            for attr_id, status in failures.items()
+                            if status != ZCLStatus.UNSUPPORTED_ATTRIBUTE
+                        ]
+                        errors = [
+                            _zb_path(device, zbdevice, endpoint, cluster, attr_id)
+                            for attr_id, status in failures.items()
+                            if status == ZCLStatus.UNSUPPORTED_ATTRIBUTE
+                        ]
+                        if failed:
+                            log.error(f"[FETCH] read_attributes failures: {'\n\t' if len(failed) > 1 else ''}{',\n\t'.join(failed)}")
+                        if errors:
+                            log.error(f"[FETCH] unsupported attributes: {'\n\t' if len(errors) > 1 else ''}{',\n\t'.join(errors)}")
+
+                for attribute_id in cluster.attributes.keys():
+                    if attribute_id in cluster.unsupported_attributes:
+                        continue
                     events.append(
                         DeviceParameterChangedEvent(
                             device_id=device.id,
-                            parameter_id=self._mapper.create_uuid_id(f"{device.id.__str__()}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
-                            value=value,
+                            parameter_id=self._mapper.create_uuid_id(f"{device.id}_attribute_{endpoint.endpoint_id}/{cluster_id}/{attribute_id}"),
+                            value=attr_values.get(attribute_id),
                         )
                     )
                 for command_id in cluster.commands.keys():
                     events.append(
                         DeviceParameterChangedEvent(
                             device_id=device.id,
-                            parameter_id=self._mapper.create_uuid_id(f"{device.id.__str__()}_command_{endpoint_id}/{cluster_id}/{command_id}"),
+                            parameter_id=self._mapper.create_uuid_id(f"{device.id}_command_{endpoint.endpoint_id}/{cluster_id}/{command_id}"),
                             value=None,
                         )
                     )
@@ -213,7 +268,7 @@ class ZigBeeController(AbstractController):
             if parameter.role != ParameterRole.control:
                 raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
             r = await cluster.write_attributes({parameter.integration_data.attribute_id: command.value})
-            logging.info(r)
+            log.info(f"[CMD] write_attributes {_zb_path(device, zbdevice, endpoint, cluster, parameter.integration_data.attribute_id)}: {r}")
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
@@ -235,6 +290,44 @@ class ZigBeeController(AbstractController):
             parameters: list[ZBParameterState] = list()
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
+                    readable_ids = [
+                        attr_id
+                        for attr_id, attr in cluster.attributes.items()
+                        if attr.access & ZCLAttributeAccess.Read and attr_id not in cluster.unsupported_attributes
+                    ]
+
+                    attr_values: dict[int, object] = {}
+                    cached_ids = [a for a in readable_ids if a in cluster._attr_cache]
+                    live_ids = [a for a in readable_ids if a not in cluster._attr_cache]
+                    for ids, only_cache in ((cached_ids, True), (live_ids, False)):
+                        if not ids:
+                            continue
+                        try:
+                            values, failures = await cluster.read_attributes(ids, only_cache=only_cache)
+                        except Exception as e:
+                            # TODO: investigate "OctetString is too long attrs"; can one attr issue fail the whole cluster?
+                            log.error(f"[PAIR] read_attributes error {_zb_path(device, zbdevice, endpoint, cluster, attr_ids=ids, error=e)}")
+                            continue
+                        attr_values.update(values)
+                        # Log failures
+                        cluster_path = _zb_path(device, zbdevice, endpoint, cluster)
+                        unsupported = [
+                            _zb_path(cluster=cluster, attr_id=attr_id, attr_only=True)
+                            for attr_id, status in failures.items()
+                            if status == ZCLStatus.UNSUPPORTED_ATTRIBUTE
+                        ]
+                        errors = [
+                            _zb_path(cluster=cluster, attr_id=attr_id, attr_only=True)
+                            for attr_id, status in failures.items()
+                            if status != ZCLStatus.UNSUPPORTED_ATTRIBUTE
+                        ]
+                        if unsupported:
+                            log.debug(
+                                f"[PAIR] unsupported attributes {cluster_path}: {'\n\t' if len(unsupported) > 1 else ''}{',\n\t'.join(unsupported)}"
+                            )
+                        if errors:
+                            log.debug(f"[PAIR] read_attributes failures {cluster_path}: {'\n\t' if len(errors) > 1 else ''}{',\n\t'.join(errors)}")
+
                     for attribute_id, attribute in cluster.attributes.items():
                         if attribute_id in cluster.unsupported_attributes:
                             continue
@@ -251,33 +344,9 @@ class ZigBeeController(AbstractController):
                                 visibility = ParameterVisibility.setting
 
                         if attribute.access & ZCLAttributeAccess.Read:
-                            try:
-                                if attribute_id in cluster._attr_cache:
-                                    values, failures = await cluster.read_attributes([attribute_id], only_cache=True)
-                                else:
-                                    values, failures = await cluster.read_attributes([attribute_id])
-                            except Exception as e:
-                                log.error(
-                                    f"[PAIR] read_attribute failed endpoint={endpoint.endpoint_id} cluster={cluster.cluster_id} attr={attribute_id} error={type(e).__name__} {'details=' + str(e) if str(e) else ''}"
-                                )
-                                continue
-                            if failures:
-                                remaining = dict(failures)
-                                for attr_id, status in failures.items():
-                                    if status == ZCLStatus.UNSUPPORTED_ATTRIBUTE:
-                                        cluster.add_unsupported_attribute(attr_id)
-                                        log.debug(
-                                            f"[PAIR] UNSUPPORTED_ATTRIBUTE endpoint={endpoint.endpoint_id} cluster={cluster.cluster_id} attr={attr_id}"
-                                        )
-                                        del remaining[attr_id]
-                                if remaining:
-                                    log.error(
-                                        f"[PAIR] read_attribute failed endpoint={endpoint.endpoint_id} cluster={cluster.cluster_id} attr={attribute_id} remaining={remaining}"
-                                    )
-                            else:
-                                temp = values.get(attribute_id)
-                                if temp is not None:
-                                    value = attribute.type(temp).serialize()
+                            raw = attr_values.get(attribute_id)
+                            if raw is not None:
+                                value = attribute.type(raw).serialize()
 
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
                         min_value = None

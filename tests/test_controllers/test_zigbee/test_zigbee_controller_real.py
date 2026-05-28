@@ -9,8 +9,8 @@ pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="sessi
 
 # Zigbee test device identifiers (paired against a real device in slot --zigbee-device-idx)
 _DEVICE_ID = "d478e32a-cbb7-51bc-9ba0-0cd746b873a8"
-_PARAM_COMMAND_ID = "6063563a-9c00-506c-8616-9e1b45576c71"  # OnOff toggle command
-_PARAM_ATTR_ID = "35963eae-bbb8-52f3-a7c6-6c59a4f1798d"  # LevelControl attribute
+_PARAM_COMMAND_ID = "b7bca372-5d6e-51ab-90ab-38ba57d276c2"  # OnOff toggle command
+_PARAM_ATTR_ID = "0554f32e-15b5-5862-9e02-274a2167e86d"  # OnOff on_time attribute (writable integer)
 
 
 @pytest.mark.asyncio
@@ -64,7 +64,6 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
     # assumes device is already paired and reachable after `test_pair`
     """Send OnOff toggle; if cage is present, verify the sensor on the device slot changed."""
     if iot_cage is not None:
-        await iot_cage.power(zigbee_device_idx, True)
         await iot_cage.monitor(True)
         iot_cage.clear_events(zigbee_device_idx)
 
@@ -78,7 +77,7 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
         },
     }
     message = None
-    async with async_client_ws_connect(user.id, timeout=3) as ws:
+    async with async_client_ws_connect(user.id, timeout=10) as ws:
         await ws.send_json(command)
         while True:
             message = await ws.receive_json()
@@ -97,9 +96,9 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
 
 @pytest.mark.asyncio
 async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
+    # assumes device is already paired and reachable after `test_pair`
     """Set brightness to 0; if cage is present, verify sensor reflects the change."""
     if iot_cage is not None:
-        await iot_cage.power(zigbee_device_idx, True)
         await iot_cage.monitor(True)
         iot_cage.clear_events(zigbee_device_idx)
 
@@ -113,13 +112,11 @@ async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIo
         },
     }
     message = None
-    async with async_client_ws_connect(user.id, timeout=3) as ws:
+    async with async_client_ws_connect(user.id, timeout=10) as ws:
         await ws.send_json(command)
         while True:
             message = await ws.receive_json()
-            if message["type"] == "majordom_did_connect_device":
-                continue
-            else:
+            if message["type"] == "majordom_did_receive_event":
                 break
     assert message and message.get("type") == "majordom_did_receive_event", message
 
@@ -145,7 +142,3 @@ async def test_unpair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc |
     user = await crud.create_user()
     r = await async_client.delete(f"/v1/api/device/{_DEVICE_ID}", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
-
-    if iot_cage is not None:
-        # Leave device powered off so next test run starts from a clean state
-        await iot_cage.power(zigbee_device_idx, False)

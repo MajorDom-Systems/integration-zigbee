@@ -226,7 +226,7 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb):
+async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb, clear_majordom_db):
     mock_app: list[_MockZigpyApp] = []
 
     async def _new(config, auto_form=False):
@@ -253,15 +253,6 @@ async def coordinator_mocked(cloud_service_mock_zb, credentials_repo_mock_zb):
                 break
         else:
             raise RuntimeError("ZigBeeController not found in coordinator services")
-
-        # Clean up stale device from a previous test run
-        from majordom_hub.repository.device_repository import DeviceRepository
-        from majordom_hub.utils.database import create_async_session as _db
-
-        async with _db() as session:
-            repo = DeviceRepository(session)
-            if await repo.get(UUID("b10d1e10-189b-5c0f-a68f-6d90c4c07d7f")):
-                await repo.delete(UUID("b10d1e10-189b-5c0f-a68f-6d90c4c07d7f"))
 
         yield c
         await c.stop()

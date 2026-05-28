@@ -39,8 +39,12 @@ from .zigbee_spec import SYSTEM_CLUSTERS, get_min_step, get_unit
 log = logging.getLogger(__name__)
 
 # ZCL read_attributes request max payload: 254 bytes (EZSP LVBytes limit)
-# Header=3 bytes + 2 bytes/attr → max 125 attr IDs per request
-_MAX_ATTRS_PER_REQUEST = 125
+# Header=3 bytes + 2 bytes/attr → theoretical max 125 attr IDs per request.
+# In practice, reading too many attributes at once keeps the serial line busy
+# long enough to trigger NCP ACK timeouts.
+_MAX_ATTRS_PER_REQUEST = 25
+# Delay between attribute read chunks to let bellows send ASH ACKs.
+_INTER_CHUNK_DELAY = 0.05
 
 
 def _zb_path(
@@ -345,7 +349,7 @@ class ZigBeeController(AbstractController):
                 endpoint=endpoint,
             )
             log.info(
-                f"[CMD] write_attributes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}"
+                f"[CMD] write_attr ibutes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}"
             )
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
@@ -358,7 +362,7 @@ class ZigBeeController(AbstractController):
                     else await cluster.command(zbcommand.id)
                 )
             except Exception as e:
-                raise ZBOperationError(
+                raise ZBConnectionError(
                     f"[CMD] command error {_zb_path(device, zbdevice, endpoint, cluster, error=e)}"
                 ) from None
             # cluster.command returns the DefaultResponse or cluster-specific response;
@@ -408,6 +412,9 @@ class ZigBeeController(AbstractController):
                     attr_values |= await self._read_cluster_attributes(
                         device, zbdevice, endpoint, cluster, live_ids, log_prefix="[PAIR]"
                     )
+                    await asyncio.sleep(
+                        0.02
+                    )  # pace cluster reads; prevents NCP ACK timeout under bulk load
 
                     for attribute_id, attribute in cluster.attributes.items():
                         if attribute_id in cluster.unsupported_attributes:
@@ -622,7 +629,9 @@ class ZigBeeController(AbstractController):
                 log.error(
                     f"{log_prefix} read_attributes error {_zb_path(device, zbdevice, endpoint, cluster, attr_ids=chunk, error=e)}"
                 )
+                await asyncio.sleep(_INTER_CHUNK_DELAY)  # let bellows send pending ASH ACKs
                 continue
+            await asyncio.sleep(_INTER_CHUNK_DELAY)  # pace chunks to prevent NCP ACK timeout
             attr_values.update(values)
             _check_zcl_failures(
                 failures,

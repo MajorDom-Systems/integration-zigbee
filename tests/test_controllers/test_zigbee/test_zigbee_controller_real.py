@@ -21,7 +21,9 @@ async def test_discovery_and_pairing(async_client, async_client_ws_connect, crud
 
     message = None
     async with async_client_ws_connect(user.id, timeout=30) as ws:
-        r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=120", headers=get_user_bearer(user.id))
+        r = await async_client.post(
+            "v1/api/device/start_pairing_window?duration_sec=120", headers=get_user_bearer(user.id)
+        )
         assert r.status_code == 200, r.json()
 
         while True:
@@ -29,7 +31,9 @@ async def test_discovery_and_pairing(async_client, async_client_ws_connect, crud
             if message["type"] == "majordom_did_discover_discovery":
                 break
 
-    assert message is not None and message.get("type") == "majordom_did_discover_discovery", "No discovery message received within timeout"
+    assert message is not None and message.get("type") == "majordom_did_discover_discovery", (
+        "No discovery message received within timeout"
+    )
 
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
@@ -95,13 +99,9 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
 
 
 @pytest.mark.asyncio
-async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
+async def test_controll_attribute(crud, async_client_ws_connect):
     # assumes device is already paired and reachable after `test_pair`
-    """Set brightness to 0; if cage is present, verify sensor reflects the change."""
-    if iot_cage is not None:
-        await iot_cage.monitor(True)
-        iot_cage.clear_events(zigbee_device_idx)
-
+    """Write on_time attribute; verify WS event is received (no cage check - attribute write doesn't toggle relay)."""
     user = await crud.create_user()
     command = {
         "type": "device_command",
@@ -119,14 +119,6 @@ async def test_controll_attribute(crud, async_client_ws_connect, iot_cage: AioIo
             if message["type"] == "majordom_did_receive_event":
                 break
     assert message and message.get("type") == "majordom_did_receive_event", message
-
-    if iot_cage is not None:
-        await asyncio.sleep(0.5)
-        events = iot_cage.get_events(zigbee_device_idx)
-        assert events, f"Expected a sensor event on cage slot {zigbee_device_idx} after attribute change"
-        await iot_cage.monitor(False)
-    else:
-        warnings.warn("iot_cage is None, skipping sensor event verification")
 
 
 """

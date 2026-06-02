@@ -140,16 +140,23 @@ class ZigBeeController(AbstractController):
     _zigbee_device_path: str
     _zigbe_db: str
     # _application: ControllerApplication
-    _majordom_discoveries: dict[UUID, Discovery] = dict()  # MJ discovery metadata
-    _awaiting_zb_discoveries: dict[UUID, ZPDevice] = (
-        dict()
-    )  # connected to zigbee network but not set up in majordom yet. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
-    _connected_devices: dict[UUID, ZPDevice] = (
-        dict()
-    )  # fully connected. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
+    _majordom_discoveries: dict[UUID, Discovery]  # MJ discovery metadata
+    _awaiting_zb_discoveries: dict[
+        UUID, ZPDevice
+    ]  # connected to zigbee network but not set up in majordom yet. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
+    _connected_devices: dict[
+        UUID, ZPDevice
+    ]  # fully connected. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
 
-    _mapper = ZigBeeMapper()
-    _tasks: set[asyncio.Task] = set()
+    _mapper: ClassVar[ZigBeeMapper] = ZigBeeMapper()
+    _tasks: set[asyncio.Task]
+
+    def __init__(self, dependencies: AbstractController.Dependencies):
+        super().__init__(dependencies)
+        self._majordom_discoveries: dict[UUID, Discovery] = {}
+        self._awaiting_zb_discoveries: dict[UUID, ZPDevice] = {}
+        self._connected_devices: dict[UUID, ZPDevice] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     @property
     def name(self) -> str:
@@ -210,12 +217,15 @@ class ZigBeeController(AbstractController):
                     log.debug("[KNOWN] ieee=%s  nwk=0x%04X", zbdevice.ieee, zbdevice.nwk)
                 else:
                     self._create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
-                    await zbdevice.initialize()
                     log.debug(
                         "[UNKNOWN] ieee=%s  nwk=0x%04X — not in DB, starting disconnect timer",
                         zbdevice.ieee,
                         zbdevice.nwk,
                     )
+                    try:
+                        await zbdevice.initialize()
+                    except Exception:
+                        log.exception("[UNKNOWN] initialize failed for ieee=%s", zbdevice.ieee)
 
             # Checking if all devices in our system are still connected to ZigBee
             for device in await device_repo.get_all(self.name, ZBDevice):
@@ -505,7 +515,13 @@ class ZigBeeController(AbstractController):
 
     async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice) -> None:
         log.debug("[PAIR] starting background fetch device=%s(%s)", device.id, zbdevice.model)
-        await self.fetch(device)
+        try:
+            await self.fetch(device)
+        except Exception as e:
+            log.warning(
+                "[PAIR] fetch failed for device=%s(%s), skipping connect signal: %s", device.id, zbdevice.model, e
+            )
+            return
         await self.dependencies.output.controller_did_connect_device(self, device.id)
         log.debug("[PAIR] background fetch done, device connected device=%s(%s)", device.id, zbdevice.model)
 

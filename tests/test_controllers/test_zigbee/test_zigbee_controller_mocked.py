@@ -23,7 +23,9 @@ PARAM_ATTRIBUTE_ID = "300ecd13-41bf-579e-b7bc-1311daa4f7f8"
 
 
 @pytest.mark.asyncio
-async def test_discovery_unpaired_mocked(async_client_mocked, async_client_ws_connect_mocked, crud, get_user_bearer_mocked):
+async def test_discovery_unpaired_mocked(
+    async_client_mocked, async_client_ws_connect_mocked, crud, get_user_bearer_mocked
+):
     user = await crud.create_user()
 
     message = None

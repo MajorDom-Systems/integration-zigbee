@@ -3,7 +3,7 @@ import warnings
 
 import pytest
 
-from tests.hardware.iot_cage.aioiotrpc import AioIotRpc
+from tests.hardware.iot_cage.threaded import ThreadedIotRpc
 
 pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
@@ -13,27 +13,24 @@ _PARAM_COMMAND_ID = "b7bca372-5d6e-51ab-90ab-38ba57d276c2"  # OnOff toggle comma
 _PARAM_ATTR_ID = "0554f32e-15b5-5862-9e02-274a2167e86d"  # OnOff on_time attribute (writable integer)
 
 
-@pytest.mark.asyncio
 async def test_discovery_and_pairing(async_client, async_client_ws_connect, crud, get_user_bearer):
     """Zigbee specifics: no separate discovery step, under the hood it pairs right away."""
 
     user = await crud.create_user()
 
-    message = None
-    async with async_client_ws_connect(user.id, timeout=30) as ws:
-        r = await async_client.post(
-            "v1/api/device/start_pairing_window?duration_sec=120", headers=get_user_bearer(user.id)
-        )
-        assert r.status_code == 200, r.json()
+    r = await async_client.post("v1/api/device/start_pairing_window?duration_sec=120", headers=get_user_bearer(user.id))
+    assert r.status_code == 200, r.json()
 
-        while True:
-            message = await ws.receive_json()
-            if message["type"] == "majordom_did_discover_discovery":
-                break
-
-    assert message is not None and message.get("type") == "majordom_did_discover_discovery", (
-        "No discovery message received within timeout"
-    )
+    # Device may have already joined during coordinator startup (session fixture); check REST first.
+    r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
+    assert r.status_code == 200, r.json()
+    if _DEVICE_ID not in r.json():
+        async with async_client_ws_connect(user.id, timeout=30) as ws:
+            while True:
+                message = await ws.receive_json()
+                if message["type"] == "majordom_did_discover_discovery":
+                    break
+        assert message.get("type") == "majordom_did_discover_discovery", "No discovery message received within timeout"
 
     r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
@@ -62,7 +59,6 @@ async def test_discovery_and_pairing(async_client, async_client_ws_connect, crud
     assert message["data"] == _DEVICE_ID
 
 
-@pytest.mark.asyncio
 async def test_discovery_paired(async_client, crud, get_user_bearer):
     # assumes device is already paired and reachable after `test_pair`
     user = await crud.create_user()
@@ -70,8 +66,7 @@ async def test_discovery_paired(async_client, crud, get_user_bearer):
     assert r.status_code == 200 and r.json() == {}, r.json()
 
 
-@pytest.mark.asyncio
-async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
+async def test_control_command(crud, async_client_ws_connect, iot_cage: ThreadedIotRpc | None, zigbee_device_idx: int):
     # assumes device is already paired and reachable after `test_pair`
     """Send OnOff toggle; if cage is present, verify the sensor on the device slot changed."""
     if iot_cage is not None:
@@ -105,7 +100,6 @@ async def test_control_command(crud, async_client_ws_connect, iot_cage: AioIotRp
         warnings.warn("iot_cage is None, skipping sensor event verification")
 
 
-@pytest.mark.asyncio
 async def test_controll_attribute(crud, async_client_ws_connect):
     # assumes device is already paired and reachable after `test_pair`
     """Write on_time attribute; verify WS event is received (no cage check - attribute write doesn't toggle relay)."""
@@ -129,15 +123,13 @@ async def test_controll_attribute(crud, async_client_ws_connect):
 
 
 """
-@pytest.mark.asyncio
 async def test_events():
     raise NotImplementedError()  # TODO: test that when an attribute is updated, the correct event is sent to majordom; needs rpc for control/sensor trigger
 
 """
 
 
-@pytest.mark.asyncio
-async def test_unpair(async_client, crud, get_user_bearer, iot_cage: AioIotRpc | None, zigbee_device_idx: int):
+async def test_unpair(async_client, crud, get_user_bearer, iot_cage: ThreadedIotRpc | None, zigbee_device_idx: int):
     user = await crud.create_user()
     r = await async_client.delete(f"/v1/api/device/{_DEVICE_ID}", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()

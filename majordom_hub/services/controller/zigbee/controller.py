@@ -16,7 +16,7 @@ from zigpy.zcl.foundation import ZCLAttributeAccess
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.command import DeviceCommand
-from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery, NonEmptyStr
+from majordom_hub.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
 from majordom_hub.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 from majordom_hub.utils.serial import port_holder
@@ -376,7 +376,7 @@ class ZigBeeController(AbstractController):
                 )
 
     async def pair_device(
-        self, discovery: Discovery, credentials: CredentialsValue | None
+        self, discovery: Discovery, credentials: ProvidedCredentials | None
     ):  # Break down into submethods
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
@@ -563,7 +563,7 @@ class ZigBeeController(AbstractController):
         discovery = Discovery(
             id=discovery_id,
             integration=NonEmptyStr(self.name),
-            credentials=CredentialsType.none,
+            expected_credentials_options=[CredentialsType.none],
             expiration=None,
             transport=NonEmptyStr("ZIGBEE"),
             device_manufacturer=None,

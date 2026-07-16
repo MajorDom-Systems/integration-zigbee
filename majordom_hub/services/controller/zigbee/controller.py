@@ -135,6 +135,13 @@ def _check_zcl_failures(
 
 
 class ZigBeeController(AbstractController):
+    """Bridges the Hub to Zigbee devices through a USB coordinator radio via zigpy.
+
+    zigpy owns the Zigbee network, the ZCL, and device interviews; this controller adapts it
+    to the Hub's AbstractController contract. Zigbee has no separate discovery step — a device
+    is on the network the moment it joins the permit-join window. See readme.md.
+    """
+
     _ZIGBEE_STACK: ClassVar[Literal["bellows", "znp"]] = "bellows"
 
     _zigbee_device_path: str
@@ -158,6 +165,10 @@ class ZigBeeController(AbstractController):
         self._availability: dict[UUID, bool] = {}  # device_id -> last signalled availability
         self._tasks: set[asyncio.Task] = set()
 
+    # -------------------------------------------------------------------------
+    # AbstractController interface
+    # -------------------------------------------------------------------------
+
     @property
     def name(self) -> str:
         return "ZigBee"
@@ -175,6 +186,10 @@ class ZigBeeController(AbstractController):
     @override
     def parameter_type(self) -> Type[ZBParameter]:
         return ZBParameter
+
+    # -------------------------------------------------------------------------
+    # Lifecycle
+    # -------------------------------------------------------------------------
 
     async def start(self):
         self._zigbee_device_path = self.dependencies.hardware_interfaces[0]
@@ -260,122 +275,6 @@ class ZigBeeController(AbstractController):
             raise ZBConnectionError("ZigBee application is not started")
         log.debug("[PERMIT-JOIN] opening for %ds", duration_sec)
         await self._application.permit(duration_sec)
-
-    async def fetch(self, device: ZBDevice) -> None:
-        if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
-
-        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
-
-        if not (zbdevice := self._application.devices.get(ieee)):
-            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
-        if not zbdevice.is_initialized:
-            raise ZBUnexpectedError(f"Device {ieee} is not initialized")
-        events: list[DeviceParameterChangedEvent] = list()
-        log.debug("[FETCH] start device=%s(%s)", device.id, zbdevice.model)
-        t0 = asyncio.get_event_loop().time()
-        for endpoint in zbdevice.non_zdo_endpoints:
-            for cluster_id, cluster in endpoint.in_clusters.items():
-                readable_ids = [
-                    attr_id for attr_id in cluster.attributes.keys() if attr_id not in cluster.unsupported_attributes
-                ]
-                attr_values = await self._read_cluster_attributes(
-                    device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]", timeout=2
-                )
-
-                for attribute_id in cluster.attributes.keys():
-                    if attribute_id in cluster.unsupported_attributes:
-                        continue
-                    events.append(
-                        DeviceParameterChangedEvent(
-                            device_id=device.id,
-                            parameter_id=self._mapper.attribute_parameter_uuid(device.id, endpoint.endpoint_id, cluster_id, attribute_id),
-                            value=attr_values.get(attribute_id),
-                        )
-                    )
-                for command in cluster.commands:
-                    events.append(
-                        DeviceParameterChangedEvent(
-                            device_id=device.id,
-                            parameter_id=self._mapper.command_parameter_uuid(device.id, endpoint.endpoint_id, cluster_id, command.id),
-                            value=None,
-                        )
-                    )
-
-        log.debug(
-            "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
-        )
-        await self.dependencies.output.controller_did_receive_device_events(self, events)
-
-    async def identify(self, device: ZBDevice):
-        if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
-
-        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
-
-        if not (zbdevice := self._application.devices.get(ieee)):
-            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
-        if not zbdevice.is_initialized:
-            raise ZBUnexpectedError(f"Device {ieee} is not initialized")
-
-        for endpoint in zbdevice.non_zdo_endpoints:
-            cluster = endpoint.in_clusters.get(Identify.cluster_id)
-            if not cluster:
-                continue
-            await cluster.identify(10)  # 10 - identification time
-
-    async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
-        if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
-
-        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
-
-        if not (zbdevice := self._application.devices.get(ieee)):
-            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
-        if not (endpoint := zbdevice.endpoints.get(parameter.integration_data.endpoint_id)):
-            raise ZBUnexpectedError(f"Endpoint {parameter.integration_data.endpoint_id} not found")
-        if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
-            raise ZBUnexpectedError(f"Cluster {parameter.integration_data.cluster_id} not found")
-
-        if parameter.integration_data.type is ZBParameterType.attribute:
-            if parameter.role != ParameterRole.control:
-                raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
-            attr_id = parameter.integration_data.attribute_id
-            try:
-                result = await cluster.write_attributes({attr_id: command.value})
-            except Exception as e:
-                raise ZBConnectionError(
-                    f"[CMD] write_attributes transport error {_zb_path(device, zbdevice, endpoint, cluster, attr_id, error=e)}"
-                ) from None
-            _check_zcl_failures(
-                {r.attrid: r.status for r in result[0]},
-                cluster,
-                "[CMD]",
-                device=device,
-                zbdevice=zbdevice,
-                endpoint=endpoint,
-            )
-            log.info(f"[CMD] write_attributes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}")
-        else:
-            zbcommand = cluster.commands_by_name.get(parameter.name)
-            if not zbcommand:
-                raise ZBUnexpectedError(f"Command {parameter.name} not found in cluster")
-            try:
-                result = (
-                    await cluster.command(zbcommand.id, command.value)
-                    if command.value is not None
-                    else await cluster.command(zbcommand.id)
-                )
-            except Exception as e:
-                raise ZBConnectionError(
-                    f"[CMD] command error {_zb_path(device, zbdevice, endpoint, cluster, error=e)}"
-                ) from None
-            # cluster.command returns the DefaultResponse or cluster-specific response;
-            # check status field if present (DefaultResponse carries it)
-            if hasattr(result, "status") and result.status != ZCLStatus.SUCCESS:
-                raise ZBOperationError(
-                    f"[CMD] command failure {_zb_path(device, zbdevice, endpoint, cluster)}: status={result.status.name}"
-                )
 
     async def pair_device(
         self, discovery: Discovery, credentials: ProvidedCredentials | None
@@ -521,29 +420,6 @@ class ZigBeeController(AbstractController):
             # fetch runs in background; controller_did_connect_device fires after fetch completes
             self._create_task(self._fetch_after_pair(device, zbdevice))
 
-    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice) -> None:
-        log.debug("[PAIR] starting background fetch device=%s(%s)", device.id, zbdevice.model)
-        try:
-            await self.fetch(device)
-        except Exception as e:
-            log.warning(
-                "[PAIR] fetch failed for device=%s(%s), skipping connect signal: %s", device.id, zbdevice.model, e
-            )
-            return
-        await self._set_availability(device.id, True)
-        log.debug("[PAIR] background fetch done, device connected device=%s(%s)", device.id, zbdevice.model)
-
-    async def _set_availability(self, device_id: UUID, available: bool) -> None:
-        """Single funnel for availability transitions — dedupes so the Hub is only told on an
-        actual change, and translates it into the framework's connect / lose callbacks."""
-        if self._availability.get(device_id) == available:
-            return
-        self._availability[device_id] = available
-        if available:
-            await self.dependencies.output.controller_did_connect_device(self, device_id)
-        else:
-            await self.dependencies.output.controller_did_lose_device(self, device_id)
-
     async def unpair(self, device: ZBDevice):
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
@@ -551,8 +427,124 @@ class ZigBeeController(AbstractController):
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.device_uuid_from_ieee(device.integration_data.ieee))
 
+    async def identify(self, device: ZBDevice):
+        if not self._application:
+            raise ZBConnectionError("ZigBee application is not started")
+
+        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
+
+        if not (zbdevice := self._application.devices.get(ieee)):
+            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
+        if not zbdevice.is_initialized:
+            raise ZBUnexpectedError(f"Device {ieee} is not initialized")
+
+        for endpoint in zbdevice.non_zdo_endpoints:
+            cluster = endpoint.in_clusters.get(Identify.cluster_id)
+            if not cluster:
+                continue
+            await cluster.identify(10)  # 10 - identification time
+
+    async def fetch(self, device: ZBDevice) -> None:
+        if not self._application:
+            raise ZBConnectionError("ZigBee application is not started")
+
+        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
+
+        if not (zbdevice := self._application.devices.get(ieee)):
+            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
+        if not zbdevice.is_initialized:
+            raise ZBUnexpectedError(f"Device {ieee} is not initialized")
+        events: list[DeviceParameterChangedEvent] = list()
+        log.debug("[FETCH] start device=%s(%s)", device.id, zbdevice.model)
+        t0 = asyncio.get_event_loop().time()
+        for endpoint in zbdevice.non_zdo_endpoints:
+            for cluster_id, cluster in endpoint.in_clusters.items():
+                readable_ids = [
+                    attr_id for attr_id in cluster.attributes.keys() if attr_id not in cluster.unsupported_attributes
+                ]
+                attr_values = await self._read_cluster_attributes(
+                    device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]", timeout=2
+                )
+
+                for attribute_id in cluster.attributes.keys():
+                    if attribute_id in cluster.unsupported_attributes:
+                        continue
+                    events.append(
+                        DeviceParameterChangedEvent(
+                            device_id=device.id,
+                            parameter_id=self._mapper.attribute_parameter_uuid(device.id, endpoint.endpoint_id, cluster_id, attribute_id),
+                            value=attr_values.get(attribute_id),
+                        )
+                    )
+                for command in cluster.commands:
+                    events.append(
+                        DeviceParameterChangedEvent(
+                            device_id=device.id,
+                            parameter_id=self._mapper.command_parameter_uuid(device.id, endpoint.endpoint_id, cluster_id, command.id),
+                            value=None,
+                        )
+                    )
+
+        log.debug(
+            "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
+        )
+        await self.dependencies.output.controller_did_receive_device_events(self, events)
+
+    async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
+        if not self._application:
+            raise ZBConnectionError("ZigBee application is not started")
+
+        ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
+
+        if not (zbdevice := self._application.devices.get(ieee)):
+            raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
+        if not (endpoint := zbdevice.endpoints.get(parameter.integration_data.endpoint_id)):
+            raise ZBUnexpectedError(f"Endpoint {parameter.integration_data.endpoint_id} not found")
+        if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
+            raise ZBUnexpectedError(f"Cluster {parameter.integration_data.cluster_id} not found")
+
+        if parameter.integration_data.type is ZBParameterType.attribute:
+            if parameter.role != ParameterRole.control:
+                raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
+            attr_id = parameter.integration_data.attribute_id
+            try:
+                result = await cluster.write_attributes({attr_id: command.value})
+            except Exception as e:
+                raise ZBConnectionError(
+                    f"[CMD] write_attributes transport error {_zb_path(device, zbdevice, endpoint, cluster, attr_id, error=e)}"
+                ) from None
+            _check_zcl_failures(
+                {r.attrid: r.status for r in result[0]},
+                cluster,
+                "[CMD]",
+                device=device,
+                zbdevice=zbdevice,
+                endpoint=endpoint,
+            )
+            log.info(f"[CMD] write_attributes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}")
+        else:
+            zbcommand = cluster.commands_by_name.get(parameter.name)
+            if not zbcommand:
+                raise ZBUnexpectedError(f"Command {parameter.name} not found in cluster")
+            try:
+                result = (
+                    await cluster.command(zbcommand.id, command.value)
+                    if command.value is not None
+                    else await cluster.command(zbcommand.id)
+                )
+            except Exception as e:
+                raise ZBConnectionError(
+                    f"[CMD] command error {_zb_path(device, zbdevice, endpoint, cluster, error=e)}"
+                ) from None
+            # cluster.command returns the DefaultResponse or cluster-specific response;
+            # check status field if present (DefaultResponse carries it)
+            if hasattr(result, "status") and result.status != ZCLStatus.SUCCESS:
+                raise ZBOperationError(
+                    f"[CMD] command failure {_zb_path(device, zbdevice, endpoint, cluster)}: status={result.status.name}"
+                )
+
     # -------------------------------------------------------------------------
-    # Device -> Hub: Zigbee network events (zigpy listener)
+    # Device -> Hub: Zigbee network events (zigpy listener) & availability
     # -------------------------------------------------------------------------
 
     def device_joined(self, device: ZPDevice):
@@ -612,9 +604,32 @@ class ZigBeeController(AbstractController):
         if device_id in self._connected_devices:
             self._create_task(self._set_availability(device_id, False))
 
+    async def _set_availability(self, device_id: UUID, available: bool) -> None:
+        """Single funnel for availability transitions — dedupes so the Hub is only told on an
+        actual change, and translates it into the framework's connect / lose callbacks."""
+        if self._availability.get(device_id) == available:
+            return
+        self._availability[device_id] = available
+        if available:
+            await self.dependencies.output.controller_did_connect_device(self, device_id)
+        else:
+            await self.dependencies.output.controller_did_lose_device(self, device_id)
+
     # -------------------------------------------------------------------------
     # Private helpers
     # -------------------------------------------------------------------------
+
+    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice) -> None:
+        log.debug("[PAIR] starting background fetch device=%s(%s)", device.id, zbdevice.model)
+        try:
+            await self.fetch(device)
+        except Exception as e:
+            log.warning(
+                "[PAIR] fetch failed for device=%s(%s), skipping connect signal: %s", device.id, zbdevice.model, e
+            )
+            return
+        await self._set_availability(device.id, True)
+        log.debug("[PAIR] background fetch done, device connected device=%s(%s)", device.id, zbdevice.model)
 
     async def _read_cluster_attributes(
         self,

@@ -400,10 +400,13 @@ class ZigBeeController(AbstractController):
 
                         value = b""
 
+                        # Visibility (see the ParameterVisibility docs for the UX intent):
+                        #   reportable        -> user     (a live reading worth showing, e.g. temperature)
+                        #   writable-only     -> setting  (configured occasionally, e.g. a report interval)
+                        #   everything else   -> system   (internal ZCL bookkeeping, hidden)
+                        # Manufacturer-specific attributes (>= 0xF000) on a system cluster stay hidden.
                         visibility = ParameterVisibility.system
-                        if (
-                            attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS
-                        ):  # next manufacturer specifik and global/system attributes
+                        if attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:
                             if attribute.access & ZCLAttributeAccess.Report:
                                 visibility = ParameterVisibility.user
                             elif attribute.access & ZCLAttributeAccess.Write:

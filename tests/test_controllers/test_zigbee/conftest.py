@@ -140,7 +140,7 @@ from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from majordom_hub.services.controller.framework.relay_controller import RelayController
 from majordom_hub.services.service_manager import ServiceProxy
 
-# IEEE 00:11:22:33:44:55:66:77 → discovery_id b10d1e10-189b-5c0f-a68f-6d90c4c07d7f
+# IEEE 00:11:22:33:44:55:66:77 → discovery_id 3ad0d5e0-e32d-5b43-ac8f-150aa969c63d
 _MOCK_IEEE = t.EUI64.convert("00:11:22:33:44:55:66:77")
 _MOCK_NWK = t.NWK(0x1234)
 _NCP_IEEE = t.EUI64.convert("aa:11:22:bb:33:44:be:ef")

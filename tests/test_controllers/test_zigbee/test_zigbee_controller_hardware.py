@@ -7,7 +7,15 @@ from tests.hardware.iot_cage.threaded import ThreadedIotRpc
 
 pytestmark = [pytest.mark.hardware_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
-# Zigbee test device identifiers (paired against a real device in slot --zigbee-device-idx)
+# Zigbee test device identifiers (paired against a real device in slot --zigbee-device-idx).
+#
+# NOTE: these are derived from the DUT's IEEE address via the framework UUID helpers and MUST be
+# regenerated for your device — the id scheme changed when all integrations moved to
+# AbstractController.device_uuid / parameter_uuid (namespaced under the integration + device):
+#   device_id    = uuid5(uuid5(UUID(int=0), "zigbee"), "<DUT IEEE, e.g. 00:12:...>")
+#   command_id   = uuid5(device_id, "command_<endpoint>/6/2")        # OnOff.toggle
+#   attribute_id = uuid5(device_id, "attribute_<endpoint>/6/16385")  # OnOff.on_time
+# The values below are pre-migration and will not match until regenerated against the real DUT.
 _DEVICE_ID = "d478e32a-cbb7-51bc-9ba0-0cd746b873a8"
 _PARAM_COMMAND_ID = "b7bca372-5d6e-51ab-90ab-38ba57d276c2"  # OnOff toggle command
 _PARAM_ATTR_ID = "0554f32e-15b5-5862-9e02-274a2167e86d"  # OnOff on_time attribute (writable integer)

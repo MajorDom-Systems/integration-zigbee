@@ -2,12 +2,12 @@
 Mocked ZigBee controller tests — no real hardware required.
 
 Device: IEEE 00:11:22:33:44:55:66:77
-  discovery_id / device_id: b10d1e10-189b-5c0f-a68f-6d90c4c07d7f
+  discovery_id / device_id: 3ad0d5e0-e32d-5b43-ac8f-150aa969c63d
   Endpoints: 1 → OnOff (cluster 6), LevelControl (cluster 8)
 
-Key parameter IDs (pre-computed with ZigBeeMapper.create_uuid_id):
-  toggle command  : b68f01bd-3483-540f-a7dd-f61164190484
-  on_time attr    : 300ecd13-41bf-579e-b7bc-1311daa4f7f8  (Read|Write → control)
+Key parameter IDs (device-scoped via the framework UUID helpers — see ZigBeeMapper):
+  toggle command  : 71f0a643-94d1-5def-b4ff-c5a394fafb63
+  on_time attr    : d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd  (Read|Write → control)
 """
 
 import asyncio
@@ -15,11 +15,11 @@ import asyncio
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-DISCOVERY_ID = "b10d1e10-189b-5c0f-a68f-6d90c4c07d7f"
-# uuid5(NAMESPACE_DNS, f"{DISCOVERY_ID}_command_1/6/2")  — toggle
-PARAM_COMMAND_ID = "b68f01bd-3483-540f-a7dd-f61164190484"
-# uuid5(NAMESPACE_DNS, f"{DISCOVERY_ID}attribute_1/6/16385")  — on_time (Read|Write)
-PARAM_ATTRIBUTE_ID = "300ecd13-41bf-579e-b7bc-1311daa4f7f8"
+DISCOVERY_ID = "3ad0d5e0-e32d-5b43-ac8f-150aa969c63d"
+# parameter_uuid(DISCOVERY_ID, "command_1/6/2")  — toggle
+PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"
+# parameter_uuid(DISCOVERY_ID, "attribute_1/6/16385")  — on_time (Read|Write)
+PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"
 
 
 @pytest.mark.asyncio

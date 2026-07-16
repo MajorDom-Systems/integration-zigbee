@@ -20,6 +20,12 @@ class ZBParameterIntegrationData(BaseModel):
     attribute_id: int | None = None
     command_id: int | None = None
     type: ZBParameterType
+    # Args to send when this command is the device's one-tap main parameter and needs them (e.g. a
+    # brightness level). A command parameter's data_type is `none`, which already satisfies
+    # ParameterState.can_be_main_parameter, so no `default_value` is needed for the flag — this only
+    # carries *what to send*. send_command applies it when a command arrives with no value (i.e. the
+    # user tapped the main parameter). Mirrors Matter's default_arguments.
+    default_arguments: dict | None = None
 
 
 class ZBDevice(Device):

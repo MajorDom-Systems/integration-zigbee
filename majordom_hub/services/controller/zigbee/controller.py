@@ -139,14 +139,10 @@ class ZigBeeController(AbstractController):
 
     _zigbee_device_path: str
     _zigbe_db: str
-    # _application: ControllerApplication
-    _majordom_discoveries: dict[UUID, Discovery]  # MJ discovery metadata
-    _awaiting_zb_discoveries: dict[
-        UUID, ZPDevice
-    ]  # connected to zigbee network but not set up in majordom yet. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
-    _connected_devices: dict[
-        UUID, ZPDevice
-    ]  # fully connected. We can use less RAM if we store only IEEE data instead of the entire device. Should I add this?
+    _majordom_discoveries: dict[UUID, Discovery]  # discovery metadata surfaced to the Hub
+    _awaiting_zb_discoveries: dict[UUID, ZPDevice]  # on the network, discovered, not yet paired in majordom
+    _connected_devices: dict[UUID, ZPDevice]  # paired in majordom
+    # (the ZPDevice values could be shrunk to just the IEEE address to save memory, if needed.)
 
     _mapper: ZigBeeMapper
     _tasks: set[asyncio.Task]
@@ -255,6 +251,10 @@ class ZigBeeController(AbstractController):
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
 
+    # -------------------------------------------------------------------------
+    # Hub -> device operations
+    # -------------------------------------------------------------------------
+
     async def start_pairing_window(self, duration_sec: int) -> None:
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
@@ -355,7 +355,7 @@ class ZigBeeController(AbstractController):
                 zbdevice=zbdevice,
                 endpoint=endpoint,
             )
-            log.info(f"[CMD] write_attr ibutes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}")
+            log.info(f"[CMD] write_attributes {_zb_path(device, zbdevice, endpoint, cluster, attr_id)}")
         else:
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
@@ -609,7 +609,9 @@ class ZigBeeController(AbstractController):
         if device_id in self._connected_devices:
             self._create_task(self._set_availability(device_id, False))
 
-    # Private:
+    # -------------------------------------------------------------------------
+    # Private helpers
+    # -------------------------------------------------------------------------
 
     async def _read_cluster_attributes(
         self,

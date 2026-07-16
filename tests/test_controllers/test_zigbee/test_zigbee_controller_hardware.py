@@ -5,7 +5,7 @@ import pytest
 
 from tests.hardware.iot_cage.threaded import ThreadedIotRpc
 
-pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [pytest.mark.hardware_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
 # Zigbee test device identifiers (paired against a real device in slot --zigbee-device-idx)
 _DEVICE_ID = "d478e32a-cbb7-51bc-9ba0-0cd746b873a8"

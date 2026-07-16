@@ -1,4 +1,28 @@
+from typing import Any, NamedTuple
+
 from majordom_hub.schemas.parameter import ParameterUnit
+
+
+class MainParameterSpec(NamedTuple):
+    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: the command that makes a sensible
+    one-tap main_parameter for a device exposing that cluster, and the default arguments to send
+    with it (None = the command takes no arguments, e.g. OnOff.toggle). Iteration order is priority
+    order — the first cluster below that a device exposes wins."""
+    command_id: int
+    default_arguments: dict[str, Any] | None
+
+
+# Only clusters whose command works as a single tap belong here. Notably absent:
+# FanControl (0x0202) has no client commands at all (it's driven by the fan_mode attribute), and
+# Thermostat (0x0201) has no meaningful one-tap action — both previously mapped to command ids that
+# don't exist. Command/field names are from zigpy's cluster definitions.
+MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
+    0x0006: MainParameterSpec(0x02, None),  # OnOff.toggle
+    0x0008: MainParameterSpec(0x04, {"level": 254, "transition_time": 0}),  # LevelControl.move_to_level_with_on_off (full)
+    0x0300: MainParameterSpec(0x06, {"hue": 0, "saturation": 254, "transition_time": 0, "options_mask": 0, "options_override": 0}),  # Color.move_to_hue_and_saturation
+    0x0102: MainParameterSpec(0x05, {"percentage_lift_value": 100}),  # WindowCovering.go_to_lift_percentage (open)
+    0x0101: MainParameterSpec(0x00, {"pin_code": None}),  # DoorLock.lock_door
+}
 
 
 SYSTEM_CLUSTERS: set[int] = {

@@ -20,6 +20,9 @@ class ZBParameterIntegrationData(BaseModel):
     attribute_id: int | None = None
     command_id: int | None = None
     type: ZBParameterType
+    # Arguments the app sends when this parameter is used as a device's main (one-tap) parameter and
+    # its command needs them (e.g. a brightness level). Mirrors Matter's default_arguments.
+    default_arguments: dict | None = None
 
 
 class ZBDevice(Device):

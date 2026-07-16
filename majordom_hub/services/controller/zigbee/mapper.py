@@ -1,7 +1,8 @@
 import zigpy.types as t
 
 from enum import Flag, Enum
-from uuid import UUID, NAMESPACE_DNS, uuid5
+from typing import Callable
+from uuid import UUID
 from zigpy.types import EUI64
 from zigpy.zcl.foundation import ZCLAttributeAccess, DataType, DataTypeId
 
@@ -9,6 +10,38 @@ from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType
 
 
 class ZigBeeMapper:
+    def __init__(
+        self,
+        device_uuid: Callable[[str], UUID],
+        parameter_uuid: Callable[[UUID, str], UUID],
+    ):
+        # The controller's framework UUID generators (see AbstractController). Every Zigbee
+        # id — device from its IEEE address, parameters from their endpoint/cluster/attribute
+        # path — is derived through these, so a device's parameters are namespaced under the
+        # device and stay identical whether built at pairing, on fetch, or from a live report.
+        self._device_uuid = device_uuid
+        self._parameter_uuid = parameter_uuid
+
+    # -------------------------------------------------------------------------
+    # Identity: Zigbee addresses/paths -> MajorDom UUIDs
+    # -------------------------------------------------------------------------
+
+    def device_uuid_from_ieee(self, ieee: str) -> UUID:
+        return self._device_uuid(ieee)
+
+    def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
+        return self._parameter_uuid(device_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
+
+    def command_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
+        return self._parameter_uuid(device_id, f"command_{endpoint_id}/{cluster_id}/{command_id}")
+
+    def command_field_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_index: int) -> UUID:
+        return self._parameter_uuid(device_id, f"field_{endpoint_id}/{cluster_id}/{command_id}/{field_index}")
+
+    # -------------------------------------------------------------------------
+    # Value / type conversions
+    # -------------------------------------------------------------------------
+
     def convert_eui64_to_str(self, data: EUI64) -> str:
         return EUI64.__str__(data)
 
@@ -73,8 +106,5 @@ class ZigBeeMapper:
             DataTypeId.EUI64, DataTypeId.key128,
         }:
             return ParameterDataType.data
-    
-        return ParameterDataType.none
 
-    def create_uuid_id(self, id: str) -> UUID:
-        return uuid5(NAMESPACE_DNS, id)
+        return ParameterDataType.none

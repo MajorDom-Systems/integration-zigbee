@@ -526,12 +526,16 @@ class ZigBeeController(AbstractController):
             zbcommand = cluster.commands_by_name.get(parameter.name)
             if not zbcommand:
                 raise ZBUnexpectedError(f"Command {parameter.name} not found in cluster")
+            # A value-less send (e.g. tapping the main parameter) falls back to the arguments this
+            # command was set up with as a main parameter — see integration_data.default_arguments.
+            arguments = command.value if command.value is not None else parameter.integration_data.default_arguments
             try:
-                result = (
-                    await cluster.command(zbcommand.id, command.value)
-                    if command.value is not None
-                    else await cluster.command(zbcommand.id)
-                )
+                if isinstance(arguments, dict):
+                    result = await cluster.command(zbcommand.id, **arguments)
+                elif arguments is not None:
+                    result = await cluster.command(zbcommand.id, arguments)
+                else:
+                    result = await cluster.command(zbcommand.id)
             except Exception as e:
                 raise ZBConnectionError(
                     f"[CMD] command error {_zb_path(device, zbdevice, endpoint, cluster, error=e)}"

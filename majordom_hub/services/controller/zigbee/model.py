@@ -20,8 +20,12 @@ class ZBParameterIntegrationData(BaseModel):
     attribute_id: int | None = None
     command_id: int | None = None
     type: ZBParameterType
-    # Arguments the app sends when this parameter is used as a device's main (one-tap) parameter and
-    # its command needs them (e.g. a brightness level). Mirrors Matter's default_arguments.
+    # Args to send when this command is the device's one-tap main parameter and needs them (e.g. a
+    # brightness level). A command parameter's data_type is `none`, which already satisfies
+    # ParameterState.can_be_main_parameter, so no `default_value` is needed for the flag — this only
+    # carries *what to send*. NOTE: nothing in the hub reads this yet (the app reads the top-level
+    # `default_value`, not integration_data); it's dead until the app consumes it or the design
+    # collapses onto `default_value`. Mirrors Matter's default_arguments.
     default_arguments: dict | None = None
 
 

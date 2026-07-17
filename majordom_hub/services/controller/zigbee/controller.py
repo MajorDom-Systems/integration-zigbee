@@ -169,9 +169,7 @@ class ZigBeeController(AbstractController):
     # AbstractController interface
     # -------------------------------------------------------------------------
 
-    @property
-    def name(self) -> str:
-        return "ZigBee"
+    name = "ZigBee"
 
     @property
     def discoveries(self) -> dict[UUID, Discovery]:

@@ -20,4 +20,4 @@ class ZBAttributeUpdatedListener:
         )
         event = DeviceParameterChangedEvent(device_id=self._device_id, parameter_id=parameter_id, value=value)
 
-        asyncio.create_task(self._controller.dependencies.output.controller_did_receive_device_events(self._controller, [event]))
+        asyncio.create_task(self._controller.dependencies.output.controller_did_receive_events(self._controller, [event]))

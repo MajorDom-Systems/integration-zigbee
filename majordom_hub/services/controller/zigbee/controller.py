@@ -244,7 +244,7 @@ class ZigBeeController(AbstractController):
                         log.exception("[UNKNOWN] initialize failed for ieee=%s", zbdevice.ieee)
 
             # Any device in our DB that isn't on the network anymore is marked unavailable on boot.
-            for device in await device_repo.get_all(self.name, ZBDevice):
+            for device in await device_repo.get_all(as_=ZBDevice):
                 ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
                 if self._application.get_device(ieee):
                     continue
@@ -488,7 +488,7 @@ class ZigBeeController(AbstractController):
         log.debug(
             "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
         )
-        await self.dependencies.output.controller_did_receive_device_events(self, events)
+        await self.dependencies.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
         if not self._application:

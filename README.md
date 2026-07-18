@@ -52,6 +52,29 @@ asyncio.run(run_controller(ZigBeeController, db_path="devices.db"))
 poetry run python run.py
 ```
 
+To use the integration in **standalone mode** — discover, pair, control, or fetch a device
+programmatically — build the dependencies yourself and call the controller directly. Visit the
+[MajorDom integration docs](https://docs.majordom.io/device-integration/standalone) for more
+details, like the dependency structure and receiving discoveries/events in standalone mode by
+implementing a delegate.
+
+```python
+import asyncio
+
+from majordom_integration_sdk.dev import build_dependencies
+from majordom_integration_sdk.schemas.device import ProvidedCredentials
+from majordom_zigbee import ZigBeeController
+
+async def main():
+    deps = build_dependencies(integration=ZigBeeController.name, db_path="devices.db")
+    controller = ZigBeeController(deps)
+    await controller.start()
+    # ... await controller.pair_device(discovery, ProvidedCredentials(...)), send_command, fetch ...
+    await controller.stop()
+
+asyncio.run(main())
+```
+
 ## About this integration
 
 - **Protocol / platform:** Zigbee via `zigpy` (with `bellows` / `zigpy-znp` radio libraries).

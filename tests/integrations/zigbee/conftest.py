@@ -19,7 +19,6 @@ from starlette.websockets import WebSocketDisconnect
 from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
-from tests.hardware.iot_cage.threaded import ThreadedIotRpc
 
 logger = logging.getLogger(__name__)
 cloud_key = Paths.data.keys.cloud.read_text()
@@ -67,62 +66,8 @@ async def cloud_service_mock_zb():
         yield mock
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def coordinator(
-    cloud_service_mock_zb, credentials_repo_mock_zb, clear_zigbee_db, clear_majordom_db, power_on_and_settle
-):
-    with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
-        c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"ZigBeeController"}))
-        await c.start(wait_forever=False)
-        yield c
-        await c.stop()
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def async_client(coordinator):
-    async with AsyncClient(
-        transport=ASGITransport(app=coordinator.server_service.app), base_url="http://testserver"
-    ) as client:
-        yield client
-
-
-@pytest.fixture(scope="session")
-def get_user_bearer():
-    return lambda id: {
-        "Authorization": "Bearer "
-        + jwt.encode(
-            {
-                "role": "access",
-                "user_id": id.hex if isinstance(id, UUID) else id,
-                "is_admin": False,
-                "exp": time.time() + 3600,
-            },
-            cloud_key,
-            algorithm="RS256",
-        )
-    }
-
-
-@pytest.fixture(scope="session")
-def async_client_ws_connect(coordinator, get_user_bearer):
-    @asynccontextmanager
-    async def _connect(user_id: UUID, timeout: float = 1.0, raise_timeout: bool = False):
-        try:
-            async with asyncio.timeout(timeout):
-                async with AsyncClient(
-                    transport=ASGIWebSocketTransport(app=coordinator.server_service.app), base_url="ws://testserver"
-                ) as client:
-                    async with aconnect_ws("/v1/ws/user", client, headers=get_user_bearer(user_id)) as ws:
-                        yield ws
-        except asyncio.TimeoutError:
-            if raise_timeout:
-                raise AssertionError("WebSocket connection timed out. Not satisfactory message received within timeout")
-            else:
-                pass
-        except WebSocketDisconnect as e:
-            assert e.code == 1000, f"Unexpected WebSocket disconnect code: {e.code}"
-
-    return _connect
+# Real-hardware zigbee fixtures + tests now live in tests/hardware/test_hardware.py (all
+# integrations' hardware in one place). This conftest keeps only the mocked, no-hardware e2e stack.
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +82,7 @@ import zigpy.types as t
 import zigpy.zdo.types as zdo_t
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 
-from majordom_hub.services.controller.framework.relay_controller import RelayController
+from majordom_hub.services.relay import RelayController
 from majordom_hub.services.service_manager import ServiceProxy
 
 # IEEE 00:11:22:33:44:55:66:77 → discovery_id 3ad0d5e0-e32d-5b43-ac8f-150aa969c63d
@@ -300,54 +245,4 @@ def async_client_ws_connect_mocked(coordinator_mocked, get_user_bearer_mocked):
     return _connect
 
 
-# ---------------------------------------------------------------------------
-# IoT cage fixtures — real hardware control
-# ---------------------------------------------------------------------------
-# lab-pi5 (192.168.0.109) USB serial port map:
-#   /dev/ttyUSB0  →  1a86 CH340         = IoT Cage Arduino
-#   /dev/ttyUSB1  →  SiLabs CP2102N     = Zigbee/Thread
-#   /dev/ttyUSB2  →  SONOFF ZWave Dongle = Z-Wave controller (not used by hub yet)
-_LAB_IOT_CAGE_PORT = "/dev/ttyUSB0"
-_LAB_ZIGBEE_DEVICE_IDX = 0  # cage slot wired to the Zigbee DUT
-
-_BOOT_SETTLE_S = 10  # device auto-resets during first ~5s; don't open pairing window before this
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def power_on_and_settle(iot_cage: ThreadedIotRpc, zigbee_device_idx: int):
-    """Power on the device and wait for its boot reset to complete."""
-    await iot_cage.power(zigbee_device_idx, False)
-    await asyncio.sleep(1)
-    await iot_cage.power(zigbee_device_idx, True)
-    await asyncio.sleep(_BOOT_SETTLE_S)
-
-
-@pytest.fixture(scope="session")
-def zigbee_device_idx(request: pytest.FixtureRequest) -> int:
-    v = request.config.getoption("--zigbee-device-idx")
-    return int(v) if v is not None else _LAB_ZIGBEE_DEVICE_IDX
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def iot_cage(request: pytest.FixtureRequest) -> AsyncGenerator[ThreadedIotRpc, None]:
-    port: str = request.config.getoption("--iot-cage-port") or _LAB_IOT_CAGE_PORT
-    cage = ThreadedIotRpc(port=port, timeout=8.0)
-    await cage.connect()
-    try:
-        yield cage
-    finally:
-        try:
-            await cage.all_off()
-        except Exception:
-            pass
-        await cage.close()
-
-
-@pytest.fixture(scope="session")
-def clear_zigbee_db():
-    """Delete the zigbee device DB (+ WAL/SHM) before the real-hardware test session."""
-    db = Paths.data.integrations.named("zigbee") / "zigbee.db"
-    for suffix in ("", "-wal", "-shm"):
-        p = db.parent / (db.name + suffix)
-        if p.exists():
-            p.unlink()
+# Real-hardware cage fixtures moved to tests/hardware/test_hardware.py.

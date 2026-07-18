@@ -75,21 +75,10 @@ docstring-code-format = true
 "__init__.py" = ["F401"]
 "tests/*" = ["E402"]
 
-# Migrated from the Hub (type-checked there under mypy). 14 frictions with zigpy's interface
-# types (str|None ieee into EUI64 conversions, Status/read_attributes types) and internal
-# _zb_path helpers. Scoped rather than rewritten blind — the unit suite only exercises a
-# subset of the ZCL surface, so tightening these needs more coverage first.
-# TODO: broaden the mocked coverage, then fix and drop this block (cf. the HomeKit cleanup).
+# The zigpy ControllerApplication test double intentionally uses loose signatures — scoped to
+# conftest.py (the only test file that needs it) so the rest of the suite stays fully checked.
 [[tool.ty.overrides]]
-include = ["majordom_zigbee/**"]
-
-[tool.ty.overrides.rules]
-invalid-argument-type = "ignore"
-unresolved-attribute = "ignore"
-
-# The zigpy ControllerApplication test double intentionally uses loose signatures.
-[[tool.ty.overrides]]
-include = ["tests/**"]
+include = ["tests/conftest.py"]
 
 [tool.ty.overrides.rules]
 invalid-method-override = "ignore"

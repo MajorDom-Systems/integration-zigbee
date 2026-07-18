@@ -7,6 +7,8 @@ from majordom_integration_sdk.schemas.parameter import ParameterDataType, Parame
 from zigpy.types import EUI64
 from zigpy.zcl.foundation import DataType, DataTypeId, ZCLAttributeAccess
 
+from .exceptions import ZBUnexpectedError
+
 
 class ZigBeeMapper:
     def __init__(
@@ -25,7 +27,11 @@ class ZigBeeMapper:
     # Identity: Zigbee addresses/paths -> MajorDom UUIDs
     # -------------------------------------------------------------------------
 
-    def device_uuid_from_ieee(self, ieee: str) -> UUID:
+    def device_uuid_from_ieee(self, ieee: str | None) -> UUID:
+        # ieee is Optional on the domain model, but a paired Zigbee device always has one; a
+        # missing address here means a corrupt/half-written record, not a normal path.
+        if ieee is None:
+            raise ZBUnexpectedError("Zigbee device is missing its IEEE address")
         return self._device_uuid(ieee)
 
     def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
@@ -46,7 +52,10 @@ class ZigBeeMapper:
     def convert_eui64_to_str(self, data: EUI64) -> str:
         return EUI64.__str__(data)
 
-    def convert_str_to_eui64(self, data: str) -> EUI64:
+    def convert_str_to_eui64(self, data: str | None) -> EUI64:
+        # Same as device_uuid_from_ieee: the domain field is Optional but must be present here.
+        if data is None:
+            raise ZBUnexpectedError("Zigbee device is missing its IEEE address")
         return EUI64.convert(data)
 
     def parse_zigbee_attribute_access(self, access) -> ParameterRole:

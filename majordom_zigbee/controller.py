@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from enum import Enum
-from typing import ClassVar, Literal, override
+from typing import ClassVar, Literal, cast, override
 from uuid import UUID
 
 import zigpy.endpoint
@@ -127,7 +127,7 @@ def _check_zcl_failures(
         return
     details = ",\n\t".join(
         f"{_zb_path(cluster=cluster, attr_id=attr_id, attr_only=True) if attr_id is not None else 'global'}"
-        f"={status.name}"  # type: ignore[union-attr]
+        f"={getattr(status, 'name', status)}"  # ZCLStatus enum, or a raw int for unknown codes
         for attr_id, status in errors.items()
     )
     if raise_errors:
@@ -314,7 +314,9 @@ class ZigBeeController(AbstractController):
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
                         min_value = None
                         max_value = None
-                        valid_values = None
+                        # Annotated so the untyped-enum comprehension below (member.name is Unknown)
+                        # matches Parameter.valid_values' declared type.
+                        valid_values: dict[int | float | str, str] | None = None
                         min_step = get_min_step(cluster.cluster_id, attribute_id)
                         unit = get_unit(cluster.cluster_id, attribute_id)
 
@@ -359,7 +361,7 @@ class ZigBeeController(AbstractController):
                         for i, field in enumerate(command.schema.fields):
                             min_value = None
                             max_value = None
-                            valid_values = None
+                            valid_values: dict[int | float | str, str] | None = None
 
                             if hasattr(field.type, "min_value"):
                                 min_value = field.type.min_value
@@ -510,6 +512,12 @@ class ZigBeeController(AbstractController):
             raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
         if not (endpoint := zbdevice.endpoints.get(parameter.integration_data.endpoint_id)):
             raise ZBUnexpectedError(f"Endpoint {parameter.integration_data.endpoint_id} not found")
+        # endpoints[0] is the device's ZDO; a real parameter always lives on a numbered Endpoint.
+        # Narrowing here fixes it for every downstream use (in_clusters, _zb_path, _check_zcl_failures).
+        if not isinstance(endpoint, zigpy.endpoint.Endpoint):
+            raise ZBUnexpectedError(
+                f"Endpoint {parameter.integration_data.endpoint_id} is the ZDO, not a device endpoint"
+            )
         if not (cluster := endpoint.in_clusters.get(parameter.integration_data.cluster_id)):
             raise ZBUnexpectedError(f"Cluster {parameter.integration_data.cluster_id} not found")
 
@@ -666,7 +674,11 @@ class ZigBeeController(AbstractController):
         chunks = [ids[i : i + _MAX_ATTRS_PER_REQUEST] for i in range(0, len(ids), _MAX_ATTRS_PER_REQUEST)]
         for chunk in chunks:
             try:
-                values, failures = await cluster.read_attributes(chunk, only_cache=only_cache, timeout=timeout)
+                # read_attributes accepts attribute names or ids (list[int | str]); we only pass
+                # ids, and list invariance is the only reason the plain list[int] doesn't fit.
+                values, failures = await cluster.read_attributes(
+                    cast("list[int | str]", chunk), only_cache=only_cache, timeout=timeout
+                )
             except Exception as e:
                 log.error(
                     f"{log_prefix} read_attributes error "

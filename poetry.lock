@@ -3529,4 +3529,4 @@ testing = ["pytest (>=7.3.1)", "pytest-asyncio (>=0.21.0)", "pytest-cov (>=4.1.0
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "1f3eacbae2945ee8610843bd66a4be77b1bf8d29bbdf2ea5cbfa196045926cb8"
+content-hash = "d89c696d9e8ab8e6e04978277f42d4ceb996f72f8b65939d24dc4d2c33634842"

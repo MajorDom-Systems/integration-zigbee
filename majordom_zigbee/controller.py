@@ -34,7 +34,16 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .zigbee_spec import MAIN_PARAMETER_BY_CLUSTER, SYSTEM_CLUSTERS, get_min_step, get_unit
+from .zigbee_spec import (
+    CONFIG_HEAVY_CLUSTERS,
+    EVERYDAY_CONTROL_ATTRIBUTES,
+    MAIN_PARAMETER_BY_CLUSTER,
+    SYSTEM_CLUSTERS,
+    USER_READINGS,
+    get_min_step,
+    get_unit,
+    is_metadata_attribute,
+)
 
 log = logging.getLogger(__name__)
 
@@ -299,14 +308,25 @@ class ZigBeeController(AbstractController):
 
                         value = b""
 
-                        # Visibility (see the ParameterVisibility docs for the UX intent):
-                        #   reportable        -> user     (a live reading worth showing, e.g. temperature)
-                        #   writable-only     -> setting  (configured occasionally, e.g. a report interval)
-                        #   everything else   -> system   (internal ZCL bookkeeping, hidden)
+                        # Visibility (see the parameter-visibility recipe in the docs). Curated
+                        # everyday controls and readings win; metadata (divisors/bounds) is hidden
+                        # even when reportable; otherwise reportable -> user, writable -> setting.
                         # Manufacturer-specific attributes (>= 0xF000) on a system cluster stay hidden.
+                        key = (cluster.cluster_id, attribute_id)
+                        role = self._mapper.parse_zigbee_attribute_access(attribute.access)
                         visibility = ParameterVisibility.system
                         if attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:
-                            if attribute.access & ZCLAttributeAccess.Report:
+                            if is_metadata_attribute(cluster.cluster_id, attribute_id, attribute.name):
+                                visibility = ParameterVisibility.system  # scaling/bounds -> hidden metadata source
+                            elif key in EVERYDAY_CONTROL_ATTRIBUTES:
+                                visibility = ParameterVisibility.user
+                                role = ParameterRole.control  # force: zigpy under-declares (e.g. fan_mode)
+                            elif key in USER_READINGS:
+                                visibility = ParameterVisibility.user
+                            elif (
+                                attribute.access & ZCLAttributeAccess.Report
+                                and cluster.cluster_id not in CONFIG_HEAVY_CLUSTERS
+                            ):
                                 visibility = ParameterVisibility.user
                             elif attribute.access & ZCLAttributeAccess.Write:
                                 visibility = ParameterVisibility.setting
@@ -341,7 +361,7 @@ class ZigBeeController(AbstractController):
                                 min_step=min_step,
                                 unit=unit,
                                 valid_values=valid_values,
-                                role=self._mapper.parse_zigbee_attribute_access(attribute.access),
+                                role=role,
                                 integration_data=ZBParameterIntegrationData(
                                     endpoint_id=endpoint.endpoint_id,
                                     cluster_id=cluster.cluster_id,

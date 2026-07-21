@@ -41,6 +41,69 @@ SYSTEM_CLUSTERS: set[int] = {
     0x1000,  # Touchlink
 }
 
+
+# --- Visibility curation (see docs/device-integration/parameter-visibility recipe) ------------
+# Zigbee attributes carry a Report flag, which is a decent "this is a live reading" signal, so the
+# controller keeps `reportable -> user` as a fallback. Curation refines it:
+#   - EVERYDAY_CONTROL_ATTRIBUTES: writable everyday controls -> user (+ forced control role, since
+#     zigpy sometimes under-declares access, e.g. FanControl.fan_mode has no flags at all)
+#   - USER_READINGS: readings that must show even if a device doesn't mark them reportable -> user
+#   - metadata (divisors/multipliers/bounds/tolerances, see is_metadata_attribute) -> system, even
+#     if reportable, and reused as metadata sources (min/max/step) for the real parameters
+
+EVERYDAY_CONTROL_ATTRIBUTES: set[tuple[int, int]] = {
+    (0x0202, 0x0000),  # FanControl.fan_mode (zigpy declares no access flags — force it)
+    (0x0201, 0x0011),  # Thermostat.occupied_cooling_setpoint (the everyday "set the temp")
+    (0x0201, 0x0012),  # Thermostat.occupied_heating_setpoint
+    (0x0201, 0x001C),  # Thermostat.system_mode (off/heat/cool/auto)
+}
+
+USER_READINGS: set[tuple[int, int]] = {
+    (0x0006, 0x0000),  # OnOff.on_off
+    (0x0008, 0x0000),  # LevelControl.current_level
+    (0x0201, 0x0000),  # Thermostat.local_temperature
+    (0x0402, 0x0000),  # TemperatureMeasurement.measured_value
+    (0x0405, 0x0000),  # RelativeHumidity.measured_value
+    (0x0400, 0x0000),  # IlluminanceMeasurement.measured_value
+    (0x0102, 0x0008),  # WindowCovering.current_position_lift_percentage
+    (0x0102, 0x0009),  # WindowCovering.current_position_tilt_percentage
+    (0x0001, 0x0021),  # PowerConfiguration.battery_percentage_remaining
+    (0x0500, 0x0002),  # IasZone.zone_status
+    (0x0101, 0x0000),  # DoorLock.lock_state
+    (0x0101, 0x0003),  # DoorLock.door_state
+}
+
+# Clusters where `reportable` is a poor "user reading" signal because most reportable attributes
+# are config/security (DoorLock: enable_* flags, event masks, language, credential counts). For
+# these, only curated USER_READINGS/EVERYDAY reach `user`; the rest fall to setting/system.
+CONFIG_HEAVY_CLUSTERS: set[int] = {0x0101}  # DoorLock
+
+# Attributes that are scaling constants / bounds / counts rather than user-facing readings. They
+# go to `system` and feed the metadata resolver. Curated set first; a conservative name heuristic
+# (below) catches the long tail (e.g. ElectricalMeasurement's ~18 *_divisor/*_multiplier attrs).
+METADATA_ATTRIBUTES: set[tuple[int, int]] = {
+    (0x0400, 0x0001),  # Illuminance.min_measured_value
+    (0x0400, 0x0002),  # Illuminance.max_measured_value
+    (0x0402, 0x0001),  # Temperature.min_measured_value
+    (0x0402, 0x0002),  # Temperature.max_measured_value
+    (0x0405, 0x0001),  # Humidity.min_measured_value
+    (0x0405, 0x0002),  # Humidity.max_measured_value
+}
+
+_METADATA_NAME_SUFFIXES: tuple[str, ...] = ("_divisor", "_multiplier")
+_METADATA_NAME_EXACT: frozenset[str] = frozenset(
+    {"min_measured_value", "max_measured_value", "tolerance", "min_level", "max_level"}
+)
+
+
+def is_metadata_attribute(cluster_id: int, attribute_id: int, name: str) -> bool:
+    """Whether an attribute is a scaling constant / bound / count (metadata) rather than a
+    user-facing reading — curated set first, conservative name heuristic as fallback."""
+    if (cluster_id, attribute_id) in METADATA_ATTRIBUTES:
+        return True
+    return name.endswith(_METADATA_NAME_SUFFIXES) or name in _METADATA_NAME_EXACT
+
+
 # (cluster_id, attribute_id) -> ParameterUnit
 ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     # -------------------------

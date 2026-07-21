@@ -34,46 +34,13 @@ the controller with the SDK's test doubles against a simulated `zigpy` device �
 
 ## Run it standalone (without the Hub)
 
-Zigbee needs a physical 802.15.4 radio (a Zigbee coordinator such as a SkyConnect, ConBee, or a
-zigpy-znp/bellows-supported dongle) at a serial path. Then:
+`majordom-zigbee` is a standalone library — import it into your own app, or run **just this
+integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
+It needs a Zigbee coordinator radio (a SkyConnect, ConBee, or a zigpy-znp/bellows-supported dongle)
+at a serial path.
 
-```python
-# run.py
-import asyncio
-
-from majordom_integration_sdk.dev import run_controller
-from majordom_zigbee import ZigBeeController
-
-# Opens the network, watches for joining devices, logs events. Ctrl-C to stop.
-asyncio.run(run_controller(ZigBeeController, db_path="devices.db"))
-```
-
-```sh
-poetry run python run.py
-```
-
-To use the integration in **standalone mode** — discover, pair, control, or fetch a device
-programmatically — build the dependencies yourself and call the controller directly. Visit the
-[MajorDom integration docs](https://docs.majordom.io/device-integration/standalone) for more
-details, like the dependency structure and receiving discoveries/events in standalone mode by
-implementing a delegate.
-
-```python
-import asyncio
-
-from majordom_integration_sdk.dev import build_dependencies
-from majordom_integration_sdk.schemas.device import ProvidedCredentials
-from majordom_zigbee import ZigBeeController
-
-async def main():
-    deps = build_dependencies(integration=ZigBeeController.name, db_path="devices.db")
-    controller = ZigBeeController(deps)
-    await controller.start()
-    # ... await controller.pair_device(discovery, ProvidedCredentials(...)), send_command, fetch ...
-    await controller.stop()
-
-asyncio.run(main())
-```
+See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
+CLI, watch mode, and the programmatic API.
 
 ## About this integration
 

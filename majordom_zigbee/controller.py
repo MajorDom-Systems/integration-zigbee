@@ -65,6 +65,23 @@ _MAX_ATTRS_PER_REQUEST = 25
 # Delay between attribute read chunks to let bellows send ASH ACKs.
 _INTER_CHUNK_DELAY = 0.05
 
+_quirks_loaded = False
+
+
+def _ensure_quirks_loaded() -> None:
+    """Register zhaquirks into zigpy's process-global registry, once. Must run before the
+    radio interviews devices so a joined device is presented in its quirked form —
+    manufacturer clusters decoded into named/typed attributes and v2 entity metadata
+    attached. setup() imports every zhaquirks module, so guard against repeat cost."""
+    global _quirks_loaded
+    if _quirks_loaded:
+        return
+    import zhaquirks
+
+    zhaquirks.setup()
+    _quirks_loaded = True
+    log.debug("[QUIRKS] zhaquirks registered into zigpy registry")
+
 
 def _zb_path(
     device: ZBDevice | None = None,
@@ -221,6 +238,9 @@ class ZigBeeController(AbstractController):
             CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
             CONF_DATABASE: self._zigbe_db,
         }
+
+        # Register per-device quirks before the radio starts interviewing devices.
+        _ensure_quirks_loaded()
 
         # Starting zigbee stack
         match self._ZIGBEE_STACK:

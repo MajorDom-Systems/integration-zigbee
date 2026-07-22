@@ -36,10 +36,12 @@ from .model import (
 )
 from .zigbee_spec import (
     CONFIG_HEAVY_CLUSTERS,
+    EVERYDAY_COMMANDS,
     EVERYDAY_CONTROL_ATTRIBUTES,
     MAIN_PARAMETER_BY_CLUSTER,
     SYSTEM_CLUSTERS,
     USER_READINGS,
+    VISIBILITY_OVERRIDES,
     get_min_step,
     get_unit,
     is_metadata_attribute,
@@ -315,15 +317,15 @@ class ZigBeeController(AbstractController):
                         key = (cluster.cluster_id, attribute_id)
                         role = self._mapper.parse_zigbee_attribute_access(attribute.access)
                         visibility = ParameterVisibility.system
-                        if attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:
+                        if key in VISIBILITY_OVERRIDES:
+                            visibility = VISIBILITY_OVERRIDES[key]
+                        elif attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:
                             if is_metadata_attribute(cluster.cluster_id, attribute_id, attribute.name):
                                 visibility = ParameterVisibility.system  # scaling/bounds -> hidden metadata source
                             elif key in EVERYDAY_CONTROL_ATTRIBUTES:
                                 visibility = ParameterVisibility.user
                                 role = ParameterRole.control  # force: zigpy under-declares (e.g. fan_mode)
-                            elif key in USER_READINGS:
-                                visibility = ParameterVisibility.user
-                            elif (
+                            elif key in USER_READINGS or (
                                 attribute.access & ZCLAttributeAccess.Report
                                 and cluster.cluster_id not in CONFIG_HEAVY_CLUSTERS
                             ):
@@ -373,10 +375,16 @@ class ZigBeeController(AbstractController):
                         )
                     for command in cluster.commands:
                         fields: list[Parameter] = []
-                        visibility = ParameterVisibility.user
 
+                        # Command visibility: system-cluster commands hidden; everyday one-tap
+                        # actions -> user; every other command (schedule/credential/log
+                        # management) -> setting.
                         if cluster.cluster_id in SYSTEM_CLUSTERS:
                             visibility = ParameterVisibility.system
+                        elif (cluster.cluster_id, command.id) in EVERYDAY_COMMANDS:
+                            visibility = ParameterVisibility.user
+                        else:
+                            visibility = ParameterVisibility.setting
 
                         for i, field in enumerate(command.schema.fields):
                             min_value = None

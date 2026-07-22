@@ -2,16 +2,21 @@
 clusters), replicating controller.py's parameter-build rules, and bucket the result the way the
 iOS app would show it: main / user / setting / system. Read-only static audit — no hardware."""
 
-import importlib, inspect
+import importlib
+import inspect
+
 from zigpy.zcl import Cluster
 from zigpy.zcl.foundation import ZCLAttributeAccess
+
 from majordom_zigbee.zigbee_spec import (
+    CONFIG_HEAVY_CLUSTERS,
+    EVERYDAY_COMMANDS,
+    EVERYDAY_CONTROL_ATTRIBUTES,
     MAIN_PARAMETER_BY_CLUSTER,
     SYSTEM_CLUSTERS,
-    EVERYDAY_CONTROL_ATTRIBUTES,
     USER_READINGS,
+    VISIBILITY_OVERRIDES,
     is_metadata_attribute,
-    CONFIG_HEAVY_CLUSTERS,
 )
 
 MODULES = [
@@ -44,16 +49,19 @@ def clusters():
 
 def attr_visibility(cluster_id, attr_id, access, name):
     # replicate controller.py curated visibility policy
+    key = (cluster_id, attr_id)
+    if key in VISIBILITY_OVERRIDES:
+        return VISIBILITY_OVERRIDES[key].value
     vis = "system"
     if attr_id < 0xF000 or cluster_id not in SYSTEM_CLUSTERS:
-        key = (cluster_id, attr_id)
         if is_metadata_attribute(cluster_id, attr_id, name):
             vis = "system"
-        elif key in EVERYDAY_CONTROL_ATTRIBUTES:
-            vis = "user"
-        elif key in USER_READINGS:
-            vis = "user"
-        elif access & ZCLAttributeAccess.Report and cluster_id not in CONFIG_HEAVY_CLUSTERS:
+        elif (
+            key in EVERYDAY_CONTROL_ATTRIBUTES
+            or key in USER_READINGS
+            or access & ZCLAttributeAccess.Report
+            and cluster_id not in CONFIG_HEAVY_CLUSTERS
+        ):
             vis = "user"
         elif access & ZCLAttributeAccess.Write:
             vis = "setting"
@@ -83,16 +91,19 @@ for cid, cls in clusters().items():
         b[vis].append(getattr(adef, "name", str(aid)))
     # client-side commands -> user (or system if system cluster)
     cmds = getattr(cls, "server_commands", {}) or {}  # sendable actions, matching controller
-    cmd_vis = "system" if is_sys else "user"
-    cmd_names = [getattr(c, "name", str(k)) for k, c in cmds.items() if isinstance(k, int)]
-    b[cmd_vis].extend(f"{n}()" for n in cmd_names)
+    for k, c in cmds.items():
+        if not isinstance(k, int):
+            continue
+        cv = "system" if is_sys else ("user" if (cid, k) in EVERYDAY_COMMANDS else "setting")
+        b[cv].append(f"{getattr(c, 'name', str(k))}()")
     for k in buckets_total:
         buckets_total[k] += len(b[k])
     rows.append((cid, cls.__name__, is_sys, cid in main_clusters, b))
 
 print(f"=== ZIGBEE full-ZCL mapping: {len(rows)} clusters ===")
 print(
-    f"total params by bucket: user={buckets_total['user']} setting={buckets_total['setting']} system={buckets_total['system']}"
+    f"total params by bucket: user={buckets_total['user']} "
+    f"setting={buckets_total['setting']} system={buckets_total['system']}"
 )
 print(f"clusters providing a MAIN parameter: {sorted(hex(c) for c in main_clusters)}\n")
 
@@ -122,6 +133,6 @@ for cid, name, is_sys, has_main, b in rows:
 
 # anomaly scan: standard attributes on SYSTEM clusters that leaked to user/setting (the `or` bug)
 print("\n=== ANOMALY: user/setting params on SYSTEM clusters (should arguably be system) ===")
-for cid, name, is_sys, has_main, b in rows:
+for cid, name, is_sys, _has_main, b in rows:
     if is_sys and (b["user"] or b["setting"]):
         print(f"  0x{cid:04X} {name}: user={b['user'][:6]} setting={b['setting'][:6]}")

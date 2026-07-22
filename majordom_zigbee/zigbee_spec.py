@@ -1,6 +1,6 @@
 from typing import Any, NamedTuple
 
-from majordom_integration_sdk.schemas.parameter import ParameterUnit
+from majordom_integration_sdk.schemas.parameter import ParameterUnit, ParameterVisibility
 
 
 class MainParameterSpec(NamedTuple):
@@ -71,12 +71,49 @@ USER_READINGS: set[tuple[int, int]] = {
     (0x0500, 0x0002),  # IasZone.zone_status
     (0x0101, 0x0000),  # DoorLock.lock_state
     (0x0101, 0x0003),  # DoorLock.door_state
+    # Energy: the primary readings only (see CONFIG_HEAVY_CLUSTERS); the min/max/overload/phase-B/C
+    # variants stay hidden.
+    (0x0B04, 0x0304),  # ElectricalMeasurement.ac_frequency
+    (0x0B04, 0x0505),  # ElectricalMeasurement.rms_voltage
+    (0x0B04, 0x0508),  # ElectricalMeasurement.rms_current
+    (0x0B04, 0x050B),  # ElectricalMeasurement.active_power
+    (0x0B04, 0x0510),  # ElectricalMeasurement.power_factor
+    (0x0702, 0x0000),  # Metering.current_summation_delivered
+    (0x0702, 0x0400),  # Metering.instantaneous_demand
+}
+
+# Per-attribute visibility overrides (win over everything). For the handful of readings that would
+# otherwise land in the wrong bucket via the reportable fallback.
+VISIBILITY_OVERRIDES: dict[tuple[int, int], ParameterVisibility] = {
+    (0x0300, 0x0003): ParameterVisibility.system,  # Color.current_x (CIE machine encoding — redundant with hue/sat)
+    (0x0300, 0x0004): ParameterVisibility.system,  # Color.current_y
+    (0x0201, 0x0007): ParameterVisibility.setting,  # Thermostat.pi_cooling_demand (diagnostic, not everyday)
+    (0x0201, 0x0008): ParameterVisibility.setting,  # Thermostat.pi_heating_demand
 }
 
 # Clusters where `reportable` is a poor "user reading" signal because most reportable attributes
-# are config/security (DoorLock: enable_* flags, event masks, language, credential counts). For
-# these, only curated USER_READINGS/EVERYDAY reach `user`; the rest fall to setting/system.
-CONFIG_HEAVY_CLUSTERS: set[int] = {0x0101}  # DoorLock
+# are config/security/metadata: DoorLock (enable_* flags, event masks, credential counts) and the
+# electrical clusters (dozens of min/max/overload/phase-B/C variants). Only curated USER_READINGS/
+# EVERYDAY reach `user`; the rest fall to setting/system.
+CONFIG_HEAVY_CLUSTERS: set[int] = {0x0101, 0x0B04, 0x0702}  # DoorLock, ElectricalMeasurement, Metering
+
+# Commands that are everyday one-tap actions (-> user). Every other command on a non-system cluster
+# defaults to `setting` (advanced: schedule/credential/log management). ids from zigpy definitions.
+EVERYDAY_COMMANDS: set[tuple[int, int]] = {
+    (0x0006, 0x00),
+    (0x0006, 0x01),
+    (0x0006, 0x02),  # OnOff off / on / toggle
+    (0x0008, 0x00),
+    (0x0008, 0x04),  # LevelControl move_to_level / _with_on_off
+    (0x0300, 0x06),
+    (0x0300, 0x0A),  # Color move_to_hue_and_saturation / move_to_color_temp
+    (0x0102, 0x00),
+    (0x0102, 0x01),
+    (0x0102, 0x02),
+    (0x0102, 0x05),  # WindowCovering up/down/stop/go_to_lift%
+    (0x0101, 0x00),
+    (0x0101, 0x01),  # DoorLock lock_door / unlock_door (credential/schedule cmds stay setting)
+}
 
 # Attributes that are scaling constants / bounds / counts rather than user-facing readings. They
 # go to `system` and feed the metadata resolver. Curated set first; a conservative name heuristic

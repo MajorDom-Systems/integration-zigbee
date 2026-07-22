@@ -52,7 +52,7 @@ SYSTEM_CLUSTERS: set[int] = {
 }
 
 
-# --- Visibility curation (see docs/device-integration/parameter-visibility recipe) ------------
+# --- Visibility curation (see docs/device-integration/parameter-ux recipe) ------------
 # Zigbee attributes carry a Report flag, which is a decent "this is a live reading" signal, so the
 # controller keeps `reportable -> user` as a fallback. Curation refines it:
 #   - EVERYDAY_CONTROL_ATTRIBUTES: writable everyday controls -> user (+ forced control role, since

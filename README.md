@@ -85,7 +85,7 @@ CLI, watch mode, and the programmatic API.
 
 Every parameter's UX metadata is resolved from several sources. Two independent axes, each with its
 own priority ladder (first match wins). See also the
-[parameter-visibility recipe](https://docs.majordom.io/device-integration/parameter-visibility).
+[parameter-ux recipe](https://docs.majordom.io/device-integration/parameter-ux).
 
 **Visibility / role / unit** — resolved by `classify_attribute()` in `zigbee_spec.py`:
 

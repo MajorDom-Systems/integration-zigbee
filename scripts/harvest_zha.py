@@ -3,7 +3,7 @@
 
 DEV / BUILD TOOL — run in a throwaway venv that has ``zha`` installed. ``zha`` is **not** a
 runtime dependency of this integration: we consume it here as a data source and vendor the
-result. See the parameter-visibility recipe and the zigbee README's priority ladder.
+result. See the parameter-ux recipe and the zigbee README's priority ladder.
 
 What it takes (the genuinely additive "judgment" that isn't in zigpy): per standard
 ``(cluster_id, attribute_id)``, zha's ``entity_category`` (→ our visibility), the entity

@@ -114,6 +114,36 @@ asyncio.run(main())
 - [x] Graceful shutdown in `stop`
 - [x] Tests pass against a simulated `zigpy` device (`tests/`)
 
+### Parameter metadata sources & priority
+
+Every parameter's UX metadata is resolved from several sources. Two independent axes, each with its
+own priority ladder (first match wins). See also the
+[parameter-visibility recipe](https://docs.majordom.io/device-integration/parameter-visibility).
+
+**Visibility / role / unit** — resolved by `classify_attribute()` in `zigbee_spec.py`:
+
+| # | Source | What it is |
+|---|--------|-----------|
+| 1 | `OUR_ATTRIBUTE_UX` (`VISIBILITY_OVERRIDES`, `USER_READINGS`, `EVERYDAY_CONTROL_ATTRIBUTES`) | our hand curation — a human's call wins over everything |
+| — | metadata / manufacturer-on-system-cluster | forced **system** (safety; scaling constants & bounds stay hidden) |
+| 2 | **v2 quirk entity metadata** | per-device judgment from a loaded `zhaquirks` `QuirkBuilder` (`quirk_ux_map()`), runtime |
+| 3 | `ZHA_ATTRIBUTE_UX` | standard-cluster judgment **harvested** from `zha` (`scripts/harvest_zha.py`, vendored — `zha` is not a runtime dep) |
+| 4 | **fallback policy** | heuristic (reportable → user, writable → setting); **logs a warning** so uncurated attrs surface. Flip `_FALLBACK_HIDE_UNCURATED` to hide-by-default once coverage is validated on real devices. |
+
+**Bounds (`min`/`max`/`step`)** — a separate ladder (`resolve_metadata_bounds()`):
+
+1. the device's own limit attributes' **runtime values** (`METADATA_SOURCES`) — ground truth for *this* device;
+2. spec tables (`ATTRIBUTE_MIN_STEP`, wire-type range);
+3. wire-type default. A missing expected limit is logged (quirk detection).
+
+**Quirks.** `zhaquirks.setup()` runs once at controller startup so joined devices are presented in
+quirked form (manufacturer clusters decoded into named/typed attributes; v2 entity metadata
+attached). This requires the `zigpy` 2.x stack.
+
+**Drift.** `scripts/check_zha_drift.py` re-harvests `zha` and diffs against the vendored artifact via
+the SDK's `diff_specs`, tiering changes ADD / REMOVE / **RECLASSIFY** (high-risk — changes what
+current users already see). CI opens a Dependabot-style refresh PR on drift.
+
 ### Notes
 
 The device/parameter ids are derived from the device's IEEE address via the SDK's UUID helpers, so

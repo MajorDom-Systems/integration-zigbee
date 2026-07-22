@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 from enum import Enum
@@ -11,13 +12,19 @@ from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
-from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
+from majordom_integration_sdk.schemas.parameter import (
+    ParameterDataType,
+    ParameterRole,
+    ParameterUnit,
+    ParameterVisibility,
+    next_main_parameter_value,
+)
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import Status as ZCLStatus
-from zigpy.zcl.foundation import ZCLAttributeAccess
+from zigpy.zcl.foundation import ZCLAttributeAccess, ZCLAttributeDef
 
 from majordom_zigbee._serial import port_holder
 
@@ -34,7 +41,18 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .zigbee_spec import MAIN_PARAMETER_BY_CLUSTER, SYSTEM_CLUSTERS, get_min_step, get_unit
+from .zigbee_spec import (
+    EVERYDAY_COMMANDS,
+    MAIN_PARAMETER_BY_CLUSTER,
+    SYSTEM_CLUSTERS,
+    MainParameterSpec,
+    UxSpec,
+    classify_attribute,
+    get_min_step,
+    get_unit,
+    resolve_metadata_bounds,
+    unit_from_zha,
+)
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +63,55 @@ log = logging.getLogger(__name__)
 _MAX_ATTRS_PER_REQUEST = 25
 # Delay between attribute read chunks to let bellows send ASH ACKs.
 _INTER_CHUNK_DELAY = 0.05
+
+_quirks_loaded = False
+
+
+_SETTING_ENTITY_TYPES = frozenset({"config", "diagnostic"})
+_SENSOR_PLATFORMS = frozenset({"sensor", "binary_sensor"})
+
+
+def quirk_ux_map(zbdevice: ZPDevice) -> dict[tuple[int, int, str], UxSpec]:
+    """Per-attribute UX judgment carried by a v2 QuirkBuilder, keyed (endpoint_id, cluster_id,
+    attribute_name). This is the runtime, device-specific tier of the classification ladder (above
+    harvested zha, below our hand overrides). Empty for non-quirked / v1-only devices.
+
+    entity_type (standard/config/diagnostic) -> visibility; entity_platform -> role; unit/
+    device_class -> ParameterUnit. Only metadata entries that target a single attribute are used.
+    """
+    quirk_def = getattr(zbdevice, "_quirk_definition", None)
+    if quirk_def is None:
+        return {}
+    out: dict[tuple[int, int, str], UxSpec] = {}
+    for meta in getattr(quirk_def, "entity_metadata", ()):
+        attr_name = getattr(meta, "attribute_name", None)
+        if not attr_name:
+            continue  # command buttons / composite entities carry no single attribute
+        entity_type = getattr(getattr(meta, "entity_type", None), "value", None)
+        platform = getattr(getattr(meta, "entity_platform", None), "value", None)
+        visibility = ParameterVisibility.setting if entity_type in _SETTING_ENTITY_TYPES else ParameterVisibility.user
+        role = ParameterRole.sensor if platform in _SENSOR_PLATFORMS else ParameterRole.control
+        unit = unit_from_zha(
+            getattr(getattr(meta, "device_class", None), "value", getattr(meta, "device_class", None)),
+            getattr(meta, "unit", None),
+        )
+        out[(meta.endpoint_id, meta.cluster_id, attr_name)] = UxSpec(visibility, role, unit)
+    return out
+
+
+def _ensure_quirks_loaded() -> None:
+    """Register zhaquirks into zigpy's process-global registry, once. Must run before the
+    radio interviews devices so a joined device is presented in its quirked form —
+    manufacturer clusters decoded into named/typed attributes and v2 entity metadata
+    attached. setup() imports every zhaquirks module, so guard against repeat cost."""
+    global _quirks_loaded
+    if _quirks_loaded:
+        return
+    import zhaquirks
+
+    zhaquirks.setup()
+    _quirks_loaded = True
+    log.debug("[QUIRKS] zhaquirks registered into zigpy registry")
 
 
 def _zb_path(
@@ -115,7 +182,10 @@ def _check_zcl_failures(
     }
 
     for attr_id in unsupported:
-        cluster.add_unsupported_attribute(attr_id)
+        # zigpy 2.0 resolves the id via find_attribute, which raises for ids the cluster
+        # definition doesn't know (a device can report unsupported for a nonstandard id).
+        with contextlib.suppress(KeyError, ValueError):
+            cluster.add_unsupported_attribute(attr_id)
     if unsupported:
         names = [_zb_path(cluster=cluster, attr_id=a, attr_only=True) for a in unsupported]
         long = len(names) > 1
@@ -199,6 +269,9 @@ class ZigBeeController(AbstractController):
             CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
             CONF_DATABASE: self._zigbe_db,
         }
+
+        # Register per-device quirks before the radio starts interviewing devices.
+        _ensure_quirks_loaded()
 
         # Starting zigbee stack
         match self._ZIGBEE_STACK:
@@ -291,25 +364,41 @@ class ZigBeeController(AbstractController):
             if not device.integration_data.ieee:
                 device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
             parameters: list[ZBParameterState] = list()
+            # v2 QuirkBuilder entity judgment for this device (empty for non-quirked devices).
+            quirk_ux = quirk_ux_map(zbdevice)
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
                     for attribute_id, attribute in cluster.attributes.items():
-                        if attribute_id in cluster.unsupported_attributes:
+                        if cluster.is_attribute_unsupported(attribute_id):
                             continue
 
                         value = b""
 
-                        # Visibility (see the ParameterVisibility docs for the UX intent):
-                        #   reportable        -> user     (a live reading worth showing, e.g. temperature)
-                        #   writable-only     -> setting  (configured occasionally, e.g. a report interval)
-                        #   everything else   -> system   (internal ZCL bookkeeping, hidden)
-                        # Manufacturer-specific attributes (>= 0xF000) on a system cluster stay hidden.
-                        visibility = ParameterVisibility.system
-                        if attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:
-                            if attribute.access & ZCLAttributeAccess.Report:
-                                visibility = ParameterVisibility.user
-                            elif attribute.access & ZCLAttributeAccess.Write:
-                                visibility = ParameterVisibility.setting
+                        # Classification via the priority ladder (see the zigbee README): our hand
+                        # overrides > v2 quirk metadata > harvested zha judgment > fallback heuristic
+                        # (which warns). Metadata and manufacturer-on-system-cluster attrs are hidden.
+                        spec, source = classify_attribute(
+                            cluster.cluster_id,
+                            attribute_id,
+                            attribute.name,
+                            writable=bool(attribute.access & ZCLAttributeAccess.Write),
+                            reportable=bool(attribute.access & ZCLAttributeAccess.Report),
+                            quirk_ux=quirk_ux.get((endpoint.endpoint_id, cluster.cluster_id, attribute.name)),
+                        )
+                        visibility = spec.visibility
+                        role = (
+                            spec.role
+                            if spec.role is not None
+                            else self._mapper.parse_zigbee_attribute_access(attribute.access)
+                        )
+                        if source.startswith("fallback"):
+                            log.warning(
+                                "[PAIR] uncurated attribute %s -> %s (%s); add to OUR_ATTRIBUTE_UX "
+                                "or refresh the zha harvest",
+                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
+                                visibility.value,
+                                source,
+                            )
 
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
                         min_value = None
@@ -318,12 +407,28 @@ class ZigBeeController(AbstractController):
                         # matches Parameter.valid_values' declared type.
                         valid_values: dict[int | float | str, str] | None = None
                         min_step = get_min_step(cluster.cluster_id, attribute_id)
+                        # Our spec tables win; the harvested/quirk unit fills gaps get_unit() leaves plain.
                         unit = get_unit(cluster.cluster_id, attribute_id)
+                        if unit is ParameterUnit.plain and spec.unit is not None:
+                            unit = spec.unit
 
                         if hasattr(attribute.type, "min_value"):
                             min_value = attribute.type.min_value
                         if hasattr(attribute.type, "max_value"):
                             max_value = attribute.type.max_value
+
+                        # Metadata priority 1: the device's own limit attributes (runtime values) win
+                        # over the wire-type default. cluster.get returns the cached sibling value.
+                        min_value, max_value, missing_bounds = resolve_metadata_bounds(
+                            cluster.cluster_id, attribute_id, cluster.get, min_value, max_value
+                        )
+                        for missing_attr in missing_bounds:
+                            log.debug(
+                                "[PAIR] metadata source %s not reported for %s — quirk or unsupported; "
+                                "using wire-type default",
+                                _zb_path(cluster=cluster, attr_id=missing_attr, attr_only=True),
+                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
+                            )
 
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
                             valid_values = {member.name: str(member.value) for member in attribute.type}
@@ -341,7 +446,7 @@ class ZigBeeController(AbstractController):
                                 min_step=min_step,
                                 unit=unit,
                                 valid_values=valid_values,
-                                role=self._mapper.parse_zigbee_attribute_access(attribute.access),
+                                role=role,
                                 integration_data=ZBParameterIntegrationData(
                                     endpoint_id=endpoint.endpoint_id,
                                     cluster_id=cluster.cluster_id,
@@ -353,10 +458,16 @@ class ZigBeeController(AbstractController):
                         )
                     for command in cluster.commands:
                         fields: list[Parameter] = []
-                        visibility = ParameterVisibility.user
 
+                        # Command visibility: system-cluster commands hidden; everyday one-tap
+                        # actions -> user; every other command (schedule/credential/log
+                        # management) -> setting.
                         if cluster.cluster_id in SYSTEM_CLUSTERS:
                             visibility = ParameterVisibility.system
+                        elif (cluster.cluster_id, command.id) in EVERYDAY_COMMANDS:
+                            visibility = ParameterVisibility.user
+                        else:
+                            visibility = ParameterVisibility.setting
 
                         for i, field in enumerate(command.schema.fields):
                             min_value = None
@@ -407,16 +518,19 @@ class ZigBeeController(AbstractController):
                             )
                         )
             device.parameters = parameters
-            main_parameter_id, default_arguments = self._get_device_main_parameter(device.id, zbdevice)
+            main_parameter_id, main_spec = self._get_device_main_parameter(device.id, zbdevice)
             device.main_parameter = main_parameter_id
-            if main_parameter_id and default_arguments is not None:
-                # Attach the default arguments to the chosen main parameter so a one-tap send
-                # works; drop the main parameter if the command wasn't actually exposed.
+            if main_parameter_id and main_spec is not None:
+                # Attach the one-tap send info to the chosen main parameter; drop the main parameter
+                # if the target command/attribute wasn't actually exposed.
                 main_parameter = next((p for p in parameters if p.id == main_parameter_id), None)
                 if main_parameter is None:
                     device.main_parameter = None
-                else:
-                    main_parameter.integration_data.default_arguments = default_arguments
+                elif main_spec.is_attribute:
+                    # Enum attribute main: store the cycle subset for the send path to rotate through.
+                    main_parameter.integration_data.main_cycle = main_spec.cycle
+                elif main_spec.default_arguments is not None:
+                    main_parameter.integration_data.default_arguments = main_spec.default_arguments
             log.debug(
                 f"[PAIR] mapped schema {_zb_path(device, zbdevice)}\n\t"
                 + "\n\t".join(
@@ -468,14 +582,14 @@ class ZigBeeController(AbstractController):
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
                 readable_ids = [
-                    attr_id for attr_id in cluster.attributes if attr_id not in cluster.unsupported_attributes
+                    attr_id for attr_id in cluster.attributes if not cluster.is_attribute_unsupported(attr_id)
                 ]
                 attr_values = await self._read_cluster_attributes(
                     device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]", timeout=2
                 )
 
                 for attribute_id in cluster.attributes:
-                    if attribute_id in cluster.unsupported_attributes:
+                    if cluster.is_attribute_unsupported(attribute_id):
                         continue
                     events.append(
                         DeviceParameterChange(
@@ -525,8 +639,23 @@ class ZigBeeController(AbstractController):
             if parameter.role != ParameterRole.control:
                 raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
             attr_id = parameter.integration_data.attribute_id
+            if command.value is not None:
+                value = command.value
+            else:
+                # Value-less send = the user tapped this attribute main parameter. For an enum,
+                # cycle through the curated subset (main_cycle) or the full valid_values; otherwise
+                # fall back to the parameter's stored default_value.
+                cycle = parameter.integration_data.main_cycle or sorted(parameter.valid_values or {})
+                if cycle:
+                    value = next_main_parameter_value(cluster.get(attr_id), cycle)
+                elif parameter.default_value is not None:
+                    value = int.from_bytes(parameter.default_value, "big", signed=True)
+                else:
+                    value = None
+                if value is None:
+                    raise ZBUnexpectedError(f"No value to send for main parameter '{parameter.name}'")
             try:
-                result = await cluster.write_attributes({attr_id: command.value})
+                result = await cluster.write_attributes({attr_id: value})
             except Exception as e:
                 raise ZBConnectionError(
                     f"[CMD] write_attributes transport error "
@@ -674,10 +803,10 @@ class ZigBeeController(AbstractController):
         chunks = [ids[i : i + _MAX_ATTRS_PER_REQUEST] for i in range(0, len(ids), _MAX_ATTRS_PER_REQUEST)]
         for chunk in chunks:
             try:
-                # read_attributes accepts attribute names or ids (list[int | str]); we only pass
-                # ids, and list invariance is the only reason the plain list[int] doesn't fit.
+                # read_attributes accepts attribute names/ids/defs; we only pass ids, and list
+                # invariance is the only reason the plain list[int] doesn't fit the wider param type.
                 values, failures = await cluster.read_attributes(
-                    cast("list[int | str]", chunk), only_cache=only_cache, timeout=timeout
+                    cast("list[int | str | ZCLAttributeDef]", chunk), only_cache=only_cache, timeout=timeout
                 )
             except Exception as e:
                 log.error(
@@ -720,17 +849,22 @@ class ZigBeeController(AbstractController):
         self._majordom_discoveries.pop(discovery_id)
         self._awaiting_zb_discoveries.pop(discovery_id)
 
-    def _get_device_main_parameter(self, device_id: UUID, zbdevice: ZPDevice) -> tuple[UUID | None, dict | None]:
+    def _get_device_main_parameter(
+        self, device_id: UUID, zbdevice: ZPDevice
+    ) -> tuple[UUID | None, MainParameterSpec | None]:
         """Pick the parameter used for the device's one-tap action on the room view, in cluster
-        priority order (see MAIN_PARAMETER_BY_CLUSTER). Returns the parameter id and the default
-        arguments to send with it, or (None, None) if the device has no sensible one-tap action."""
+        priority order (see MAIN_PARAMETER_BY_CLUSTER). Returns the parameter id and its spec
+        (command or attribute main), or (None, None) if the device has no sensible one-tap action."""
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
                 if endpoint.in_clusters.get(cluster_id):
-                    return (
-                        self._mapper.command_parameter_uuid(
-                            device_id, endpoint.endpoint_id, cluster_id, spec.command_id
-                        ),
-                        spec.default_arguments,
-                    )
+                    if spec.is_attribute:
+                        param_id = self._mapper.attribute_parameter_uuid(
+                            device_id, endpoint.endpoint_id, cluster_id, spec.target_id
+                        )
+                    else:
+                        param_id = self._mapper.command_parameter_uuid(
+                            device_id, endpoint.endpoint_id, cluster_id, spec.target_id
+                        )
+                    return param_id, spec
         return None, None

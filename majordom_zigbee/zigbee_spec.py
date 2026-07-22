@@ -1,22 +1,30 @@
 from typing import Any, NamedTuple
 
-from majordom_integration_sdk.schemas.parameter import ParameterUnit
+from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterUnit, ParameterVisibility
+
+from .zigbee_spec_zha import ZHA_ATTRIBUTE_UX
 
 
 class MainParameterSpec(NamedTuple):
-    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: the command that makes a sensible
-    one-tap main_parameter for a device exposing that cluster, and the default arguments to send
-    with it (None = the command takes no arguments, e.g. OnOff.toggle). Iteration order is priority
-    order — the first cluster below that a device exposes wins."""
+    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: what makes a sensible one-tap
+    main_parameter for a device exposing that cluster. Iteration order is priority order — the
+    first cluster below that a device exposes wins.
 
-    command_id: int
-    default_arguments: dict[str, Any] | None
+    - command main (default): ``target_id`` is a command id; ``default_arguments`` are sent with it
+      (None = the command takes no arguments, e.g. OnOff.toggle).
+    - attribute main (``is_attribute=True``): ``target_id`` is an attribute id; a tap writes it. For
+      an enum attribute (e.g. FanControl.fan_mode) the tap **cycles** through ``cycle`` (an ordered
+      value subset, e.g. off/on for a toggle) or the param's full valid_values when ``cycle`` is None.
+    """
+
+    target_id: int
+    default_arguments: dict[str, Any] | None = None
+    is_attribute: bool = False
+    cycle: list[int] | None = None
 
 
-# Only clusters whose command works as a single tap belong here. Notably absent:
-# FanControl (0x0202) has no client commands at all (it's driven by the fan_mode attribute), and
-# Thermostat (0x0201) has no meaningful one-tap action — both previously mapped to command ids that
-# don't exist. Command/field names are from zigpy's cluster definitions.
+# Command/field names are from zigpy's cluster definitions. FanControl (0x0202) has no commands —
+# it's driven by the fan_mode attribute, so its one-tap is an ATTRIBUTE main that cycles off/on.
 MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x0006: MainParameterSpec(0x02, None),  # OnOff.toggle
     0x0008: MainParameterSpec(
@@ -27,6 +35,8 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     ),  # Color.move_to_hue_and_saturation
     0x0102: MainParameterSpec(0x05, {"percentage_lift_value": 100}),  # WindowCovering.go_to_lift_percentage (open)
     0x0101: MainParameterSpec(0x00, {"pin_code": None}),  # DoorLock.lock_door
+    # FanControl.fan_mode attribute — tap cycles Off(0) <-> On(4) (a toggle).
+    0x0202: MainParameterSpec(0x0000, is_attribute=True, cycle=[0x00, 0x04]),
 }
 
 
@@ -40,6 +50,272 @@ SYSTEM_CLUSTERS: set[int] = {
     0x0019,  # OTA
     0x1000,  # Touchlink
 }
+
+
+# --- Visibility curation (see docs/device-integration/parameter-visibility recipe) ------------
+# Zigbee attributes carry a Report flag, which is a decent "this is a live reading" signal, so the
+# controller keeps `reportable -> user` as a fallback. Curation refines it:
+#   - EVERYDAY_CONTROL_ATTRIBUTES: writable everyday controls -> user (+ forced control role, since
+#     zigpy sometimes under-declares access, e.g. FanControl.fan_mode has no flags at all)
+#   - USER_READINGS: readings that must show even if a device doesn't mark them reportable -> user
+#   - metadata (divisors/multipliers/bounds/tolerances, see is_metadata_attribute) -> system, even
+#     if reportable, and reused as metadata sources (min/max/step) for the real parameters
+
+EVERYDAY_CONTROL_ATTRIBUTES: set[tuple[int, int]] = {
+    (0x0202, 0x0000),  # FanControl.fan_mode (zigpy declares no access flags — force it)
+    (0x0201, 0x0011),  # Thermostat.occupied_cooling_setpoint (the everyday "set the temp")
+    (0x0201, 0x0012),  # Thermostat.occupied_heating_setpoint
+    (0x0201, 0x001C),  # Thermostat.system_mode (off/heat/cool/auto)
+}
+
+USER_READINGS: set[tuple[int, int]] = {
+    (0x0006, 0x0000),  # OnOff.on_off
+    (0x0008, 0x0000),  # LevelControl.current_level
+    (0x0201, 0x0000),  # Thermostat.local_temperature
+    (0x0402, 0x0000),  # TemperatureMeasurement.measured_value
+    (0x0405, 0x0000),  # RelativeHumidity.measured_value
+    (0x0400, 0x0000),  # IlluminanceMeasurement.measured_value
+    (0x0102, 0x0008),  # WindowCovering.current_position_lift_percentage
+    (0x0102, 0x0009),  # WindowCovering.current_position_tilt_percentage
+    (0x0001, 0x0021),  # PowerConfiguration.battery_percentage_remaining
+    (0x0500, 0x0002),  # IasZone.zone_status
+    (0x0101, 0x0000),  # DoorLock.lock_state
+    (0x0101, 0x0003),  # DoorLock.door_state
+    # Energy: the primary readings only (see CONFIG_HEAVY_CLUSTERS); the min/max/overload/phase-B/C
+    # variants stay hidden.
+    (0x0B04, 0x0304),  # ElectricalMeasurement.ac_frequency
+    (0x0B04, 0x0505),  # ElectricalMeasurement.rms_voltage
+    (0x0B04, 0x0508),  # ElectricalMeasurement.rms_current
+    (0x0B04, 0x050B),  # ElectricalMeasurement.active_power
+    (0x0B04, 0x0510),  # ElectricalMeasurement.power_factor
+    (0x0702, 0x0000),  # Metering.current_summation_delivered
+    (0x0702, 0x0400),  # Metering.instantaneous_demand
+}
+
+# Per-attribute visibility overrides (win over everything). For the handful of readings that would
+# otherwise land in the wrong bucket via the reportable fallback.
+VISIBILITY_OVERRIDES: dict[tuple[int, int], ParameterVisibility] = {
+    (0x0300, 0x0003): ParameterVisibility.system,  # Color.current_x (CIE machine encoding — redundant with hue/sat)
+    (0x0300, 0x0004): ParameterVisibility.system,  # Color.current_y
+    (0x0201, 0x0007): ParameterVisibility.setting,  # Thermostat.pi_cooling_demand (diagnostic, not everyday)
+    (0x0201, 0x0008): ParameterVisibility.setting,  # Thermostat.pi_heating_demand
+}
+
+# Clusters where `reportable` is a poor "user reading" signal because most reportable attributes
+# are config/security/metadata: DoorLock (enable_* flags, event masks, credential counts) and the
+# electrical clusters (dozens of min/max/overload/phase-B/C variants). Only curated USER_READINGS/
+# EVERYDAY reach `user`; the rest fall to setting/system.
+CONFIG_HEAVY_CLUSTERS: set[int] = {0x0101, 0x0B04, 0x0702}  # DoorLock, ElectricalMeasurement, Metering
+
+# Commands that are everyday one-tap actions (-> user). Every other command on a non-system cluster
+# defaults to `setting` (advanced: schedule/credential/log management). ids from zigpy definitions.
+EVERYDAY_COMMANDS: set[tuple[int, int]] = {
+    (0x0006, 0x00),
+    (0x0006, 0x01),
+    (0x0006, 0x02),  # OnOff off / on / toggle
+    (0x0008, 0x00),
+    (0x0008, 0x04),  # LevelControl move_to_level / _with_on_off
+    (0x0300, 0x06),
+    (0x0300, 0x0A),  # Color move_to_hue_and_saturation / move_to_color_temp
+    (0x0102, 0x00),
+    (0x0102, 0x01),
+    (0x0102, 0x02),
+    (0x0102, 0x05),  # WindowCovering up/down/stop/go_to_lift%
+    (0x0101, 0x00),
+    (0x0101, 0x01),  # DoorLock lock_door / unlock_door (credential/schedule cmds stay setting)
+}
+
+# Attributes that are scaling constants / bounds / counts rather than user-facing readings. They
+# go to `system` and feed the metadata resolver. Curated set first; a conservative name heuristic
+# (below) catches the long tail (e.g. ElectricalMeasurement's ~18 *_divisor/*_multiplier attrs).
+METADATA_ATTRIBUTES: set[tuple[int, int]] = {
+    (0x0400, 0x0001),  # Illuminance.min_measured_value
+    (0x0400, 0x0002),  # Illuminance.max_measured_value
+    (0x0402, 0x0001),  # Temperature.min_measured_value
+    (0x0402, 0x0002),  # Temperature.max_measured_value
+    (0x0405, 0x0001),  # Humidity.min_measured_value
+    (0x0405, 0x0002),  # Humidity.max_measured_value
+}
+
+_METADATA_NAME_SUFFIXES: tuple[str, ...] = ("_divisor", "_multiplier")
+_METADATA_NAME_EXACT: frozenset[str] = frozenset(
+    {"min_measured_value", "max_measured_value", "tolerance", "min_level", "max_level"}
+)
+
+
+def is_metadata_attribute(cluster_id: int, attribute_id: int, name: str) -> bool:
+    """Whether an attribute is a scaling constant / bound / count (metadata) rather than a
+    user-facing reading — curated set first, conservative name heuristic as fallback."""
+    if (cluster_id, attribute_id) in METADATA_ATTRIBUTES:
+        return True
+    return name.endswith(_METADATA_NAME_SUFFIXES) or name in _METADATA_NAME_EXACT
+
+
+# --- The merged UX classification (priority ladder; see the zigbee README) --------------------
+# Every source of a parameter's (visibility, role, unit) judgment funnels through classify_attribute.
+# role/unit of None mean "keep what the caller derived from zigpy" (access flags / get_unit()).
+
+
+class UxSpec(NamedTuple):
+    visibility: ParameterVisibility
+    role: ParameterRole | None = None
+    unit: ParameterUnit | None = None
+
+
+# zha unit strings / device_classes -> our ParameterUnit. Shared by the runtime quirk-v2 reader
+# and mirrored (standalone) in scripts/harvest_zha.py. Unmapped -> None (keep get_unit()).
+_ZHA_UNIT_BY_STRING: dict[str, ParameterUnit] = {
+    "°C": ParameterUnit.celsius, "%": ParameterUnit.percentage, "V": ParameterUnit.volt,
+    "A": ParameterUnit.ampere, "W": ParameterUnit.watt, "Hz": ParameterUnit.hertz,
+    "lx": ParameterUnit.lux, "kWh": ParameterUnit.kwh, "ppm": ParameterUnit.ppm,
+    "µg/m³": ParameterUnit.ugm3, "Pa": ParameterUnit.pascal, "hPa": ParameterUnit.pascal,
+    "kPa": ParameterUnit.pascal, "K": ParameterUnit.kelvin, "mired": ParameterUnit.mired,
+    "m³/h": ParameterUnit.m3h, "s": ParameterUnit.second,
+}
+_ZHA_UNIT_BY_DEVICE_CLASS: dict[str, ParameterUnit] = {
+    "temperature": ParameterUnit.celsius, "humidity": ParameterUnit.percentage,
+    "battery": ParameterUnit.percentage, "illuminance": ParameterUnit.lux,
+    "power": ParameterUnit.watt, "voltage": ParameterUnit.volt, "current": ParameterUnit.ampere,
+    "energy": ParameterUnit.kwh, "pressure": ParameterUnit.pascal, "frequency": ParameterUnit.hertz,
+}
+
+
+def unit_from_zha(device_class: str | None, unit: str | None) -> ParameterUnit | None:
+    """Translate a zha/HA unit string or device_class to our ParameterUnit, or None if unknown."""
+    if unit and unit in _ZHA_UNIT_BY_STRING:
+        return _ZHA_UNIT_BY_STRING[unit]
+    if device_class and device_class in _ZHA_UNIT_BY_DEVICE_CLASS:
+        return _ZHA_UNIT_BY_DEVICE_CLASS[device_class]
+    return None
+
+
+def _our_attribute_ux() -> dict[tuple[int, int], UxSpec]:
+    """Our hand curation as UX overrides — the single highest static-priority source (a human's
+    call wins over harvested/quirk judgment). Built from the curated sets so there's one source
+    of truth per attribute."""
+    out: dict[tuple[int, int], UxSpec] = {}
+    for key in USER_READINGS:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.sensor)
+    for key in EVERYDAY_CONTROL_ATTRIBUTES:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.control)
+    for key, vis in VISIBILITY_OVERRIDES.items():
+        out[key] = UxSpec(vis)
+    return out
+
+
+OUR_ATTRIBUTE_UX: dict[tuple[int, int], UxSpec] = _our_attribute_ux()
+
+
+def _zha_uxspec(key: tuple[int, int]) -> UxSpec | None:
+    t = ZHA_ATTRIBUTE_UX.get(key)
+    if t is None:
+        return None
+    return UxSpec(ParameterVisibility(t[0]), ParameterRole(t[1]), ParameterUnit(t[2]))
+
+
+# Flip to True once harvested + quirk coverage is validated on real devices: unmatched attributes
+# then hide (system) instead of the reportable->user heuristic. See the zigbee README (fallback).
+_FALLBACK_HIDE_UNCURATED = False
+
+
+def classify_attribute(
+    cluster_id: int,
+    attribute_id: int,
+    name: str,
+    *,
+    writable: bool,
+    reportable: bool,
+    quirk_ux: UxSpec | None = None,
+) -> tuple[UxSpec, str]:
+    """Resolve an attribute's (visibility, role, unit) by the priority ladder, returning the spec
+    and a source tag (for logging / drift). Ladder, first match wins:
+
+      1. OUR_ATTRIBUTE_UX          — hand curation, a human's call wins over everything
+      2. metadata / manufacturer-on-system-cluster — forced system (safety)
+      3. quirk_ux                  — v2 QuirkBuilder entity metadata (runtime, device-specific)
+      4. ZHA_ATTRIBUTE_UX          — harvested standard-spec judgment
+      5. fallback policy           — heuristic; WARNS (uncurated attribute)
+    """
+    key = (cluster_id, attribute_id)
+
+    if (spec := OUR_ATTRIBUTE_UX.get(key)) is not None:
+        return spec, "ours"
+
+    if is_metadata_attribute(cluster_id, attribute_id, name):
+        return UxSpec(ParameterVisibility.system), "metadata"
+    # Manufacturer-specific attrs (>= 0xF000) on infrastructure clusters stay hidden.
+    if attribute_id >= 0xF000 and cluster_id in SYSTEM_CLUSTERS:
+        return UxSpec(ParameterVisibility.system), "mfr-on-system-cluster"
+
+    if quirk_ux is not None:
+        return quirk_ux, "quirk-v2"
+
+    if (spec := _zha_uxspec(key)) is not None:
+        return spec, "zha"
+
+    # 5. Fallback policy (uncurated) — WARNS. Kept as a heuristic until coverage is validated.
+    if _FALLBACK_HIDE_UNCURATED or cluster_id in SYSTEM_CLUSTERS:
+        return UxSpec(ParameterVisibility.system), "fallback-system"
+    if reportable and cluster_id not in CONFIG_HEAVY_CLUSTERS:
+        return UxSpec(ParameterVisibility.user), "fallback-reportable"
+    if writable:
+        return UxSpec(ParameterVisibility.setting), "fallback-writable"
+    return UxSpec(ParameterVisibility.system), "fallback-system"
+
+
+class MetadataSource(NamedTuple):
+    """Sibling attributes whose runtime VALUES provide a parameter's min/max — the device's own
+    limit attributes (the ones we hide as metadata via ``is_metadata_attribute``). Priority 1 in the
+    resolver: runtime sibling value > wire-type default. Mirrors Matter's ``MetadataSource``."""
+
+    min_attr: int | None = None
+    max_attr: int | None = None
+
+
+# (cluster_id, attribute_id) of a shown parameter -> the sibling min/max limit attributes on the
+# same cluster whose runtime values bound it. The mirror of Matter's METADATA_SOURCES.
+METADATA_SOURCES: dict[tuple[int, int], MetadataSource] = {
+    (0x0008, 0x0000): MetadataSource(0x0002, 0x0003),  # LevelControl.current_level <- min/max_level
+    (0x0400, 0x0000): MetadataSource(0x0001, 0x0002),  # Illuminance.measured_value <- min/max_measured_value
+    (0x0402, 0x0000): MetadataSource(0x0001, 0x0002),  # Temperature.measured_value <- min/max_measured_value
+    (0x0403, 0x0000): MetadataSource(0x0001, 0x0002),  # Pressure.measured_value <- min/max_measured_value
+    (0x0404, 0x0000): MetadataSource(0x0001, 0x0002),  # Flow.measured_value <- min/max_measured_value
+    (0x0405, 0x0000): MetadataSource(0x0001, 0x0002),  # Humidity.measured_value <- min/max_measured_value
+    # Thermostat setpoints bounded by the device's absolute-limit attributes.
+    (0x0201, 0x0011): MetadataSource(0x0007, 0x0008),  # occupied_cooling_setpoint <- abs_min/max_cool_setpoint_limit
+    (0x0201, 0x0012): MetadataSource(0x0003, 0x0004),  # occupied_heating_setpoint <- abs_min/max_heat_setpoint_limit
+}
+
+
+def resolve_metadata_bounds(
+    cluster_id: int,
+    attribute_id: int,
+    get_value,
+    default_min,
+    default_max,
+) -> tuple[Any, Any, list[int]]:
+    """Metadata priority 1: override a parameter's min/max with the device's own limit attributes'
+    runtime VALUES. ``get_value(attr_id)`` returns the cached sibling value (or None if the device
+    doesn't report it). Returns ``(min, max, missing)`` where ``missing`` lists the expected source
+    attribute ids that had no value — the caller warns so a quirk / omitted limit surfaces in logs."""
+    source = METADATA_SOURCES.get((cluster_id, attribute_id))
+    if source is None:
+        return default_min, default_max, []
+    min_v, max_v = default_min, default_max
+    missing: list[int] = []
+    for attr_id, is_min in ((source.min_attr, True), (source.max_attr, False)):
+        if attr_id is None:
+            continue
+        resolved = get_value(attr_id)
+        if resolved is not None:
+            if is_min:
+                min_v = resolved
+            else:
+                max_v = resolved
+        else:
+            missing.append(attr_id)
+    return min_v, max_v, missing
+
 
 # (cluster_id, attribute_id) -> ParameterUnit
 ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
@@ -57,7 +333,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     # Color Control (0x0300)
     (0x0300, 0x0001): ParameterUnit.percentage,  # current_hue
     (0x0300, 0x0003): ParameterUnit.percentage,  # current_saturation
-    (0x0300, 0x0007): ParameterUnit.plain,  # color_temperature_mireds — TODO: add mired
+    (0x0300, 0x0007): ParameterUnit.mired,  # color_temperature_mireds
     (0x0300, 0x4010): ParameterUnit.plain,  # color_temp_physical_min_mireds
     (0x0300, 0x4011): ParameterUnit.plain,  # color_temp_physical_max_mireds
     (0x0300, 0x4012): ParameterUnit.plain,  # couple_color_temp_to_level_min_mireds
@@ -82,7 +358,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     (0x0403, 0x0011): ParameterUnit.pascal,
     (0x0403, 0x0012): ParameterUnit.pascal,
     # Flow Measurement (0x0404)
-    (0x0404, 0x0000): ParameterUnit.mps,  # m³/h — nearest kinematic
+    (0x0404, 0x0000): ParameterUnit.m3h,  # flow, m³/h
     (0x0404, 0x0001): ParameterUnit.mps,
     (0x0404, 0x0002): ParameterUnit.mps,
     # Relative Humidity (0x0405)
@@ -111,7 +387,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     (0x040D, 0x0001): ParameterUnit.ppm,
     (0x040D, 0x0002): ParameterUnit.ppm,
     # PM2.5 (0x042A)
-    (0x042A, 0x0000): ParameterUnit.ppm,  # µg/m³ — TODO: add ugm3
+    (0x042A, 0x0000): ParameterUnit.ugm3,  # PM2.5, µg/m³
     (0x042A, 0x0001): ParameterUnit.ppm,
     (0x042A, 0x0002): ParameterUnit.ppm,
     # Electrical Conductivity (0x040B)
@@ -165,7 +441,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     # -------------------------
     # Metering (0x0702)
     # -------------------------
-    (0x0702, 0x0000): ParameterUnit.joule,  # current_summation_delivered — TODO: add kwh
+    (0x0702, 0x0000): ParameterUnit.kwh,  # current_summation_delivered
     (0x0702, 0x0001): ParameterUnit.joule,  # current_summation_received
     (0x0702, 0x0002): ParameterUnit.joule,  # current_max_demand_delivered
     (0x0702, 0x0003): ParameterUnit.joule,  # current_max_demand_received

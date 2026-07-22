@@ -1,0 +1,67 @@
+name: zha harvest drift
+
+# Weekly drift canary + auto-refresh PR (the Dependabot-spirit refresher for the VENDORED artifact;
+# real Dependabot handles the actual packages).
+#
+# PURPOSE: `majordom_zigbee/zigbee_spec_zha.py` is judgment harvested from the `zha` library
+# (entity_category / device_class / state_class → our visibility/role/unit). This job installs the
+# LATEST zha (deliberately unpinned — the vendored file is the pin; the job's whole job is to see
+# what latest changed), re-harvests, and diffs against the committed artifact via the SDK's
+# diff_specs. Exit codes from check_zha_drift.py:
+#   0  no drift        -> green, nothing to do
+#   1  ADD/REMOVE only -> refresh the artifact and open a routine PR
+#   2  RECLASSIFY      -> HIGH RISK (changes what current users already see) — PR flagged for review
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # weekly, Monday
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + latest zha (harvest-only dep)
+        run: |
+          set -euo pipefail
+          pip install poetry
+          poetry install
+          # zha is NOT a runtime dep — installed here, latest, only to harvest its judgment.
+          poetry run pip install zha
+
+      - name: Check drift against the vendored artifact
+        id: drift
+        run: |
+          set -euo pipefail
+          set +e
+          poetry run python scripts/check_zha_drift.py 2> drift.txt
+          code=$?
+          set -e
+          cat drift.txt
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          if [ "$code" -gt 2 ]; then exit "$code"; fi  # real failure, not a drift signal
+
+      - name: Refresh the vendored artifact
+        if: steps.drift.outputs.code != '0'
+        run: poetry run python scripts/harvest_zha.py --out majordom_zigbee/zigbee_spec_zha.py
+
+      - name: Open the refresh PR
+        if: steps.drift.outputs.code != '0'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/zha-harvest-refresh
+          commit-message: "chore(zigbee): refresh the vendored zha harvest"
+          title: "${{ steps.drift.outputs.code == '2' && '⚠️ HIGH RISK: ' || '' }}Refresh vendored zha harvest"
+          body-path: drift.txt
+          labels: ${{ steps.drift.outputs.code == '2' && 'drift,high-risk' || 'drift' }}
+          delete-branch: true

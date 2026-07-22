@@ -58,7 +58,8 @@ def _unit_for(dc: str | None, unit: str | None) -> str:
 
 
 def _enum_value(x: object) -> str | None:
-    return getattr(x, "value", x) if x is not None else None
+    # HA enums carry str values; plain strings pass through unchanged.
+    return str(getattr(x, "value", x)) if x is not None else None
 
 
 def harvest() -> tuple[dict[tuple[int, int], tuple[str, str, str]], list[str]]:

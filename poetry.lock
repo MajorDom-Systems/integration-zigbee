@@ -595,6 +595,25 @@ humanfriendly = ">=9.1"
 cron = ["capturer (>=2.4)"]
 
 [[package]]
+name = "colorzero"
+version = "2.0"
+description = "Yet another Python color library"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "colorzero-2.0-py2.py3-none-any.whl", hash = "sha256:0e60d743a6b8071498a56465f7719c96a5e92928f858bab1be2a0d606c9aa0f8"},
+    {file = "colorzero-2.0.tar.gz", hash = "sha256:e7d5a5c26cd0dc37b164ebefc609f388de24f8593b659191e12d85f8f9d5eb58"},
+]
+
+[package.dependencies]
+setuptools = "*"
+
+[package.extras]
+doc = ["pkginfo", "sphinx", "sphinx-rtd-theme"]
+test = ["pytest", "pytest-cov"]
+
+[[package]]
 name = "coverage"
 version = "7.15.2"
 description = "Code coverage measurement for Python"
@@ -1140,6 +1159,25 @@ files = [
 ]
 
 [[package]]
+name = "gpiozero"
+version = "2.0.1"
+description = "A simple interface to GPIO devices with Raspberry Pi"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "gpiozero-2.0.1-py3-none-any.whl", hash = "sha256:8f621de357171d574c0b7ea0e358cb66e560818a47b0eeedf41ce1cdbd20c70b"},
+    {file = "gpiozero-2.0.1.tar.gz", hash = "sha256:d4ea1952689ec7e331f9d4ebc9adb15f1d01c2c9dcfabb72e752c9869ab7e97e"},
+]
+
+[package.dependencies]
+colorzero = "*"
+
+[package.extras]
+doc = ["sphinx (>=4.0)", "sphinx-rtd-theme (>=1.0)"]
+test = ["pytest", "pytest-cov"]
+
+[[package]]
 name = "gprof2dot"
 version = "2025.4.14"
 description = "Generate a dot graph from the output of several profilers."
@@ -1301,6 +1339,27 @@ plugins = ["mdit-py-plugins (>=0.5.0)"]
 profiling = ["gprof2dot"]
 rtd = ["ipykernel", "jupyter_sphinx", "mdit-py-plugins (>=0.5.0)", "myst-parser", "pyyaml", "sphinx", "sphinx-book-theme (>=1.0,<2.0)", "sphinx-copybutton", "sphinx-design"]
 testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions", "pytest-timeout", "requests"]
+
+[[package]]
+name = "mashumaro"
+version = "3.22"
+description = "Fast and well tested serialization library"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "mashumaro-3.22-py3-none-any.whl", hash = "sha256:17dc4d7294c33ef380a8b929dda0608577aa2141988c00a0c4932310108fe71d"},
+    {file = "mashumaro-3.22.tar.gz", hash = "sha256:64538cc365204402a060ebde683a86505b5a4344acf6870d79021e9fbfe57360"},
+]
+
+[package.dependencies]
+typing_extensions = ">=4.14.0"
+
+[package.extras]
+msgpack = ["msgpack (>=0.5.6)"]
+orjson = ["orjson"]
+toml = ["tomli (>=1.1.0) ; python_version < \"3.11\"", "tomli-w (>=1.0)"]
+yaml = ["pyyaml (>=3.13)"]
 
 [[package]]
 name = "mdurl"
@@ -2231,36 +2290,6 @@ files = [
 dev = ["build", "flake8", "mypy", "pytest", "twine"]
 
 [[package]]
-name = "pyserial"
-version = "3.5"
-description = "Python Serial Port Extension"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "pyserial-3.5-py2.py3-none-any.whl", hash = "sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0"},
-    {file = "pyserial-3.5.tar.gz", hash = "sha256:3c77e014170dfffbd816e6ffc205e9842efb10be9f58ec16d3e8675b4925cddb"},
-]
-
-[package.extras]
-cp2110 = ["hidapi"]
-
-[[package]]
-name = "pyserial-asyncio-fast"
-version = "0.16"
-description = "Python Serial Port Extension - Asynchronous I/O support"
-optional = false
-python-versions = ">=3.9"
-groups = ["main"]
-files = [
-    {file = "pyserial_asyncio_fast-0.16-py3-none-any.whl", hash = "sha256:88939d94e341a04c0c8bc3c1ed4e874439cb5a1e21ccfb0fd7315a8e45df1687"},
-    {file = "pyserial_asyncio_fast-0.16.tar.gz", hash = "sha256:fd52643380406739d777014b0aea0873d756b542eb62f7556567239cec007115"},
-]
-
-[package.dependencies]
-pyserial = "*"
-
-[[package]]
 name = "pytest"
 version = "9.1.1"
 description = "pytest: simple powerful testing with Python"
@@ -2427,12 +2456,24 @@ text-unidecode = ">=1.3"
 unidecode = ["Unidecode (>=1.1.1)"]
 
 [[package]]
+name = "pyusb"
+version = "1.3.1"
+description = "Easy USB access for Python"
+optional = false
+python-versions = ">=3.9.0"
+groups = ["main"]
+files = [
+    {file = "pyusb-1.3.1-py3-none-any.whl", hash = "sha256:bf9b754557af4717fe80c2b07cc2b923a9151f5c08d17bdb5345dac09d6a0430"},
+    {file = "pyusb-1.3.1.tar.gz", hash = "sha256:3af070b607467c1c164f49d5b0caabe8ac78dbed9298d703a8dbf9df4052d17e"},
+]
+
+[[package]]
 name = "pywin32"
 version = "312"
 description = "Python for Windows Extensions"
 optional = false
 python-versions = ">=3.9"
-groups = ["dev"]
+groups = ["main", "dev"]
 markers = "platform_system == \"Windows\""
 files = [
     {file = "pywin32-312-cp310-cp310-win32.whl", hash = "sha256:772235332b5d1024c696f11cea1ae4be7930f0a8b894bb43db14e3f435f1ff7e"},
@@ -2752,6 +2793,53 @@ files = [
     {file = "ruff-0.15.22-py3-none-win_arm64.whl", hash = "sha256:e1168075b72158510839f250027659cdd78476f40507dd517892304c41318661"},
     {file = "ruff-0.15.22.tar.gz", hash = "sha256:3f15175b1fb580126f58285a5dae6b2ea89000136d980c64499211f116b54809"},
 ]
+
+[[package]]
+name = "serialx"
+version = "1.8.2"
+description = "Serial library with native sync and async support for Windows, Linux, macOS, and other platforms"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "serialx-1.8.2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d2904605e59357b9815aaa70828f28429767821638fceef228f32b8fca9ffb5c"},
+    {file = "serialx-1.8.2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:abaee5c042194eaf95466e8e5eec6920af2eb0dbc00b91f1d765a0602bfd0d23"},
+    {file = "serialx-1.8.2-cp310-abi3-win32.whl", hash = "sha256:42cd054add10e390856608a6b0abb3bdf1b8aa078f26f60d7fcd852603f91417"},
+    {file = "serialx-1.8.2-cp310-abi3-win_amd64.whl", hash = "sha256:3e098c502639c7b220c419634101f28b9878a82fcee0cf06e074abb3e97f2c3e"},
+    {file = "serialx-1.8.2-cp310-abi3-win_arm64.whl", hash = "sha256:36f82e21c9b0215beae4c983d221071a44ecdcf2f7a98c659af596ff7adbaa65"},
+    {file = "serialx-1.8.2-py3-none-any.whl", hash = "sha256:6e6cffc1caec242fb06d8e16dd7880c8ba53c366ee2c43045fc38e8935ac8a6d"},
+    {file = "serialx-1.8.2.tar.gz", hash = "sha256:90c912ec8ceb4ae26a7dca158ca21e5bd8d73ddfc93c5e8d8b101a22ddccbb9a"},
+]
+
+[package.dependencies]
+pywin32 = {version = "*", markers = "platform_system == \"Windows\""}
+typing-extensions = ">=4.13.0"
+
+[package.extras]
+dev = ["aioesphomeapi (>=44.17.0) ; python_version >= \"3.11\"", "async-timeout (>=5.0.1)", "codespell (>=2.4.2)", "mypy (>=2.1.0)", "prek (>=0.3.11)", "psutil (>=7.2.2)", "pylint (>=3.3.0)", "pytest (>=9.0.1)", "pytest-asyncio (>=1.3.0)", "pytest-timeout (>=2.4.0)", "pytest-xdist (>=3.8.0)", "ruff (>=0.14.6)", "tomli (>=2.3.0) ; python_version < \"3.11\"", "types-psutil (>=7.2.2.20260508)", "types-pywin32 (>=311.0.0.20260508)", "types-setuptools (>=82.0.0.20260508)", "uv (>=0.11.14)"]
+docs = ["furo (>=2025.7.19)", "myst-parser (>=4.0.1,<5) ; python_version < \"3.11\"", "myst-parser (>=5) ; python_version >= \"3.11\"", "sphinx (>=7,<8.2.3) ; python_version < \"3.11\"", "sphinx (>=8.2.3) ; python_version >= \"3.11\"", "sphinx-autobuild (>=2024.10.3) ; python_version < \"3.11\"", "sphinx-autobuild (>=2025.8.25) ; python_version >= \"3.11\"", "sphinx-design (>=0.6)"]
+esphome = ["aioesphomeapi (>=44.17.0) ; python_version >= \"3.11\""]
+
+[[package]]
+name = "setuptools"
+version = "83.0.0"
+description = "Most extensible Python build backend with support for C/C++ extension modules"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3"},
+    {file = "setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef"},
+]
+
+[package.extras]
+check = ["pytest-checkdocs (>=2.14)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\"", "ruff (>=0.13.0) ; sys_platform != \"cygwin\""]
+core = ["importlib_metadata (>=6) ; python_version < \"3.10\"", "jaraco.functools (>=4)", "jaraco.text (>=3.7)", "more_itertools", "more_itertools (>=8.8)", "packaging (>=24.2)", "tomli (>=2.0.1) ; python_version < \"3.11\"", "wheel (>=0.43.0)"]
+cover = ["pytest-cov"]
+doc = ["furo", "jaraco.packaging (>=9.3)", "jaraco.tidelift (>=1.4)", "pygments-github-lexers (==0.0.5)", "pyproject-hooks (!=1.1)", "rst.linker (>=1.9)", "sphinx (>=3.5)", "sphinx-favicon", "sphinx-inline-tabs", "sphinx-lint", "sphinx-notfound-page (>=1,<2)", "sphinx-reredirects", "sphinxcontrib-towncrier", "towncrier (<24.7)"]
+enabler = ["pytest-enabler (>=3.4)"]
+test = ["build[virtualenv] (>=1.0.3)", "filelock (>=3.4.0)", "ini2toml[lite] (>=0.14)", "jaraco.develop (>=7.21) ; python_version >= \"3.9\" and sys_platform != \"cygwin\"", "jaraco.envs (>=2.2)", "jaraco.path (>=3.7.2)", "jaraco.test (>=5.5)", "packaging (>=24.2)", "pip (>=19.1)", "pyproject-hooks (!=1.1)", "pytest (>=6,!=8.1.*)", "pytest-home (>=0.5)", "pytest-perf ; sys_platform != \"cygwin\"", "pytest-subprocess", "pytest-timeout", "pytest-xdist (>=3)", "tomli-w (>=1.0.0)", "virtualenv (>=13.0.0)", "wheel (>=0.44.0)"]
+type = ["importlib_metadata (>=7.0.2) ; python_version < \"3.10\"", "jaraco.develop (>=7.21) ; sys_platform != \"cygwin\"", "mypy (==1.18.*)", "pytest-mypy (>=1.0.1) ; platform_python_implementation != \"PyPy\""]
 
 [[package]]
 name = "six"
@@ -3479,15 +3567,57 @@ files = [
 ifaddr = ">=0.1.7"
 
 [[package]]
+name = "zha"
+version = "2.0.1"
+description = "Library implementing ZHA for Home Assistant"
+optional = false
+python-versions = ">=3.12"
+groups = ["main"]
+files = [
+    {file = "zha-2.0.1-py3-none-any.whl", hash = "sha256:d30f5d71ec6be302ea7ef3e889f8a5a188ddf2ec2cb1f758bd3cd813a5ce8642"},
+    {file = "zha-2.0.1.tar.gz", hash = "sha256:1ed537dffa5a1aad7f24e89851e4cbfd7dfb0ba620efd3c62c3ed272a2928da2"},
+]
+
+[package.dependencies]
+attrs = "*"
+bellows = "0.49.2"
+frozendict = "*"
+zigpy = "2.0.1"
+zigpy-deconz = "0.25.5"
+zigpy-xbee = "0.21.1"
+zigpy-zigate = "0.14.0"
+zigpy-ziggurat = "1.0.1"
+zigpy-znp = "1.1.0"
+
+[package.extras]
+testing = ["coloredlogs", "homeassistant (>=2026.7.0) ; python_full_version >= \"3.14.2\"", "pytest", "python-slugify"]
+
+[[package]]
+name = "zha-quirks"
+version = "2.1.1"
+description = "Library implementing Zigpy quirks for ZHA in Home Assistant"
+optional = false
+python-versions = ">=3.12"
+groups = ["main"]
+files = [
+    {file = "zha_quirks-2.1.1-py3-none-any.whl", hash = "sha256:4d8c6d28035dd55913d7eb04427609a130d3200c5bf382fbed2aba756a75dd00"},
+    {file = "zha_quirks-2.1.1.tar.gz", hash = "sha256:58310f47ba56c9c8bcb0c13e71cd7fe456d9b9fc225a39dde5f29be9e1d1cdf1"},
+]
+
+[package.dependencies]
+zha = ">=2.0.0"
+zigpy = ">=2.0.0"
+
+[[package]]
 name = "zigpy"
-version = "0.88.0"
+version = "2.0.1"
 description = "Library implementing a Zigbee stack"
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
 files = [
-    {file = "zigpy-0.88.0-py3-none-any.whl", hash = "sha256:6ca659033b24acffdb29d6f7c449d3d75a0ff16c1bb69a3d72e084a01c9d9d93"},
-    {file = "zigpy-0.88.0.tar.gz", hash = "sha256:9afa10eb14aa5285edfdc9c1d6b76c82563a272dda0d499f54b64b365a35e111"},
+    {file = "zigpy-2.0.1-py3-none-any.whl", hash = "sha256:d0d8a46f98addbfe25f8b7ce2658ecf3e76a0463ad7d056794389ade5225be7a"},
+    {file = "zigpy-2.0.1.tar.gz", hash = "sha256:f720b4e56a626fabaa86b3a386038b483825f2c2668bb2e626c450ab483fec2e"},
 ]
 
 [package.dependencies]
@@ -3498,30 +3628,102 @@ crccheck = "*"
 cryptography = "*"
 frozendict = "*"
 jsonschema = "*"
-pyserial-asyncio-fast = "*"
+serialx = ">=1.4.0"
 typing_extensions = "*"
 voluptuous = "*"
 
-[package.extras]
-testing = ["asynctest", "coverage[toml]", "coveralls", "freezegun", "pysqlite3-binary ; platform_system == \"Linux\" and python_version < \"3.12\"", "pytest", "pytest-asyncio (<1.0.0)", "pytest-cov", "pytest-timeout", "tomli"]
-
 [[package]]
-name = "zigpy-znp"
-version = "0.14.2"
-description = "A library for zigpy which communicates with TI ZNP radios"
+name = "zigpy-deconz"
+version = "0.25.5"
+description = "A library which communicates with Deconz radios for zigpy"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "zigpy_znp-0.14.2-py3-none-any.whl", hash = "sha256:02a2170696210b0c6dfbe210bc905190384285bfd195cf650b46432647a71725"},
-    {file = "zigpy_znp-0.14.2.tar.gz", hash = "sha256:261973a91153468a13ea12fd7a0bd5c4edc2431aeb2a8459e6d9be7e084541ab"},
+    {file = "zigpy_deconz-0.25.5-py3-none-any.whl", hash = "sha256:8fb1ec3da00aa9e5607a9e7499dc9ebabeb99b996e3bb7b2cd456fa62e1029e8"},
+    {file = "zigpy_deconz-0.25.5.tar.gz", hash = "sha256:8105605f1f9fc84161d9dc617edf04343db4ca1ee59465a63b8c691616c69fe4"},
+]
+
+[package.dependencies]
+voluptuous = "*"
+zigpy = ">=0.80.0"
+
+[package.extras]
+testing = ["pytest (>=7.1.2)", "pytest-asyncio (>=0.19.0)", "pytest-cov (>=3.0.0)", "pytest-mock (>=3.8.2)", "pytest-timeout (>=2.1.0)"]
+
+[[package]]
+name = "zigpy-xbee"
+version = "0.21.1"
+description = "A library which communicates with XBee radios for zigpy"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "zigpy_xbee-0.21.1-py3-none-any.whl", hash = "sha256:d5e7903b34411a525c3db8cf18c9c8f432b2f175e9138b1597c01cbd3223b030"},
+    {file = "zigpy_xbee-0.21.1.tar.gz", hash = "sha256:a34411c58e17c9910a491da6dc06efaeef80378b5c6d1f32c92ec6dd75d5d02b"},
+]
+
+[package.dependencies]
+zigpy = ">=0.70.0"
+
+[package.extras]
+testing = ["asynctest (>=0.13.0)", "pytest (>=7.1.2)", "pytest-asyncio (>=0.19.0)"]
+
+[[package]]
+name = "zigpy-zigate"
+version = "0.14.0"
+description = "A library which communicates with ZiGate radios for zigpy"
+optional = false
+python-versions = ">=3.11"
+groups = ["main"]
+files = [
+    {file = "zigpy_zigate-0.14.0-py3-none-any.whl", hash = "sha256:6258dafeb47f6d3b20d43a1d6c2d0f819b5a9e58545bb9d64af2b2b6f2d954d9"},
+    {file = "zigpy_zigate-0.14.0.tar.gz", hash = "sha256:517a1b615763db0e943586d089b9f9ff51ce49a46564dc8fe76d979093736629"},
+]
+
+[package.dependencies]
+gpiozero = "*"
+pyusb = ">=1.1.0"
+voluptuous = "*"
+zigpy = ">=1.3.0"
+
+[package.extras]
+testing = ["pytest (>=7.1.2)", "pytest-asyncio (>=0.19.0)", "pytest-cov (>=3.0.0)", "pytest-mock (>=3.8.2)", "pytest-timeout (>=2.1.0)"]
+
+[[package]]
+name = "zigpy-ziggurat"
+version = "1.0.1"
+description = "Zigpy radio library for the Ziggurat server"
+optional = false
+python-versions = ">=3.12"
+groups = ["main"]
+files = [
+    {file = "zigpy_ziggurat-1.0.1-py3-none-any.whl", hash = "sha256:62432bb4804cd98639d483545a5b550f4c2776fffa8facec58e654ff49698a18"},
+    {file = "zigpy_ziggurat-1.0.1.tar.gz", hash = "sha256:9ffd74c03b332fcf3ebf0514a446f13eb402fb42b8efce42190fa89679c25488"},
+]
+
+[package.dependencies]
+aiohttp = "*"
+mashumaro = "*"
+zigpy = "*"
+
+[[package]]
+name = "zigpy-znp"
+version = "1.1.0"
+description = "A library for zigpy which communicates with TI ZNP radios"
+optional = false
+python-versions = ">=3.11"
+groups = ["main"]
+files = [
+    {file = "zigpy_znp-1.1.0-py3-none-any.whl", hash = "sha256:422d5c3d14c929536a96a66dfda521f3740f820c29f8dd6c7d36ef6a44aaa65d"},
+    {file = "zigpy_znp-1.1.0.tar.gz", hash = "sha256:9aed95e992ba3db527e72db0796dcf1b62e42356e865ac5d7c738929b01e15fb"},
 ]
 
 [package.dependencies]
 coloredlogs = "*"
 jsonschema = "*"
 voluptuous = "*"
-zigpy = ">=0.78.0"
+zigpy = ">=1.5.0"
 
 [package.extras]
 testing = ["pytest (>=7.3.1)", "pytest-asyncio (>=0.21.0)", "pytest-cov (>=4.1.0)", "pytest-mock (>=3.10.0)", "pytest-timeout (>=2.1.0)"]
@@ -3529,4 +3731,4 @@ testing = ["pytest (>=7.3.1)", "pytest-asyncio (>=0.21.0)", "pytest-cov (>=4.1.0
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "d89c696d9e8ab8e6e04978277f42d4ceb996f72f8b65939d24dc4d2c33634842"
+content-hash = "d4adca21683c840f4e22804aa76525525d3d7bc45bfadac12f0ad96e44a3584b"

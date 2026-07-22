@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 from enum import Enum
@@ -22,7 +23,7 @@ from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import Status as ZCLStatus
-from zigpy.zcl.foundation import ZCLAttributeAccess
+from zigpy.zcl.foundation import ZCLAttributeAccess, ZCLAttributeDef
 
 from majordom_zigbee._serial import port_holder
 
@@ -133,7 +134,10 @@ def _check_zcl_failures(
     }
 
     for attr_id in unsupported:
-        cluster.add_unsupported_attribute(attr_id)
+        # zigpy 2.0 resolves the id via find_attribute, which raises for ids the cluster
+        # definition doesn't know (a device can report unsupported for a nonstandard id).
+        with contextlib.suppress(KeyError, ValueError):
+            cluster.add_unsupported_attribute(attr_id)
     if unsupported:
         names = [_zb_path(cluster=cluster, attr_id=a, attr_only=True) for a in unsupported]
         long = len(names) > 1
@@ -312,7 +316,7 @@ class ZigBeeController(AbstractController):
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
                     for attribute_id, attribute in cluster.attributes.items():
-                        if attribute_id in cluster.unsupported_attributes:
+                        if cluster.is_attribute_unsupported(attribute_id):
                             continue
 
                         value = b""
@@ -519,14 +523,14 @@ class ZigBeeController(AbstractController):
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
                 readable_ids = [
-                    attr_id for attr_id in cluster.attributes if attr_id not in cluster.unsupported_attributes
+                    attr_id for attr_id in cluster.attributes if not cluster.is_attribute_unsupported(attr_id)
                 ]
                 attr_values = await self._read_cluster_attributes(
                     device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]", timeout=2
                 )
 
                 for attribute_id in cluster.attributes:
-                    if attribute_id in cluster.unsupported_attributes:
+                    if cluster.is_attribute_unsupported(attribute_id):
                         continue
                     events.append(
                         DeviceParameterChange(
@@ -740,10 +744,10 @@ class ZigBeeController(AbstractController):
         chunks = [ids[i : i + _MAX_ATTRS_PER_REQUEST] for i in range(0, len(ids), _MAX_ATTRS_PER_REQUEST)]
         for chunk in chunks:
             try:
-                # read_attributes accepts attribute names or ids (list[int | str]); we only pass
-                # ids, and list invariance is the only reason the plain list[int] doesn't fit.
+                # read_attributes accepts attribute names/ids/defs; we only pass ids, and list
+                # invariance is the only reason the plain list[int] doesn't fit the wider param type.
                 values, failures = await cluster.read_attributes(
-                    cast("list[int | str]", chunk), only_cache=only_cache, timeout=timeout
+                    cast("list[int | str | ZCLAttributeDef]", chunk), only_cache=only_cache, timeout=timeout
                 )
             except Exception as e:
                 log.error(

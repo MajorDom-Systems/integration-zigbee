@@ -4,19 +4,25 @@ from majordom_integration_sdk.schemas.parameter import ParameterUnit, ParameterV
 
 
 class MainParameterSpec(NamedTuple):
-    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: the command that makes a sensible
-    one-tap main_parameter for a device exposing that cluster, and the default arguments to send
-    with it (None = the command takes no arguments, e.g. OnOff.toggle). Iteration order is priority
-    order — the first cluster below that a device exposes wins."""
+    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: what makes a sensible one-tap
+    main_parameter for a device exposing that cluster. Iteration order is priority order — the
+    first cluster below that a device exposes wins.
 
-    command_id: int
-    default_arguments: dict[str, Any] | None
+    - command main (default): ``target_id`` is a command id; ``default_arguments`` are sent with it
+      (None = the command takes no arguments, e.g. OnOff.toggle).
+    - attribute main (``is_attribute=True``): ``target_id`` is an attribute id; a tap writes it. For
+      an enum attribute (e.g. FanControl.fan_mode) the tap **cycles** through ``cycle`` (an ordered
+      value subset, e.g. off/on for a toggle) or the param's full valid_values when ``cycle`` is None.
+    """
+
+    target_id: int
+    default_arguments: dict[str, Any] | None = None
+    is_attribute: bool = False
+    cycle: list[int] | None = None
 
 
-# Only clusters whose command works as a single tap belong here. Notably absent:
-# FanControl (0x0202) has no client commands at all (it's driven by the fan_mode attribute), and
-# Thermostat (0x0201) has no meaningful one-tap action — both previously mapped to command ids that
-# don't exist. Command/field names are from zigpy's cluster definitions.
+# Command/field names are from zigpy's cluster definitions. FanControl (0x0202) has no commands —
+# it's driven by the fan_mode attribute, so its one-tap is an ATTRIBUTE main that cycles off/on.
 MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x0006: MainParameterSpec(0x02, None),  # OnOff.toggle
     0x0008: MainParameterSpec(
@@ -27,6 +33,8 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     ),  # Color.move_to_hue_and_saturation
     0x0102: MainParameterSpec(0x05, {"percentage_lift_value": 100}),  # WindowCovering.go_to_lift_percentage (open)
     0x0101: MainParameterSpec(0x00, {"pin_code": None}),  # DoorLock.lock_door
+    # FanControl.fan_mode attribute — tap cycles Off(0) <-> On(4) (a toggle).
+    0x0202: MainParameterSpec(0x0000, is_attribute=True, cycle=[0x00, 0x04]),
 }
 
 
@@ -139,6 +147,60 @@ def is_metadata_attribute(cluster_id: int, attribute_id: int, name: str) -> bool
     if (cluster_id, attribute_id) in METADATA_ATTRIBUTES:
         return True
     return name.endswith(_METADATA_NAME_SUFFIXES) or name in _METADATA_NAME_EXACT
+
+
+class MetadataSource(NamedTuple):
+    """Sibling attributes whose runtime VALUES provide a parameter's min/max — the device's own
+    limit attributes (the ones we hide as metadata via ``is_metadata_attribute``). Priority 1 in the
+    resolver: runtime sibling value > wire-type default. Mirrors Matter's ``MetadataSource``."""
+
+    min_attr: int | None = None
+    max_attr: int | None = None
+
+
+# (cluster_id, attribute_id) of a shown parameter -> the sibling min/max limit attributes on the
+# same cluster whose runtime values bound it. The mirror of Matter's METADATA_SOURCES.
+METADATA_SOURCES: dict[tuple[int, int], MetadataSource] = {
+    (0x0008, 0x0000): MetadataSource(0x0002, 0x0003),  # LevelControl.current_level <- min/max_level
+    (0x0400, 0x0000): MetadataSource(0x0001, 0x0002),  # Illuminance.measured_value <- min/max_measured_value
+    (0x0402, 0x0000): MetadataSource(0x0001, 0x0002),  # Temperature.measured_value <- min/max_measured_value
+    (0x0403, 0x0000): MetadataSource(0x0001, 0x0002),  # Pressure.measured_value <- min/max_measured_value
+    (0x0404, 0x0000): MetadataSource(0x0001, 0x0002),  # Flow.measured_value <- min/max_measured_value
+    (0x0405, 0x0000): MetadataSource(0x0001, 0x0002),  # Humidity.measured_value <- min/max_measured_value
+    # Thermostat setpoints bounded by the device's absolute-limit attributes.
+    (0x0201, 0x0011): MetadataSource(0x0007, 0x0008),  # occupied_cooling_setpoint <- abs_min/max_cool_setpoint_limit
+    (0x0201, 0x0012): MetadataSource(0x0003, 0x0004),  # occupied_heating_setpoint <- abs_min/max_heat_setpoint_limit
+}
+
+
+def resolve_metadata_bounds(
+    cluster_id: int,
+    attribute_id: int,
+    get_value,
+    default_min,
+    default_max,
+) -> tuple[Any, Any, list[int]]:
+    """Metadata priority 1: override a parameter's min/max with the device's own limit attributes'
+    runtime VALUES. ``get_value(attr_id)`` returns the cached sibling value (or None if the device
+    doesn't report it). Returns ``(min, max, missing)`` where ``missing`` lists the expected source
+    attribute ids that had no value — the caller warns so a quirk / omitted limit surfaces in logs."""
+    source = METADATA_SOURCES.get((cluster_id, attribute_id))
+    if source is None:
+        return default_min, default_max, []
+    min_v, max_v = default_min, default_max
+    missing: list[int] = []
+    for attr_id, is_min in ((source.min_attr, True), (source.max_attr, False)):
+        if attr_id is None:
+            continue
+        resolved = get_value(attr_id)
+        if resolved is not None:
+            if is_min:
+                min_v = resolved
+            else:
+                max_v = resolved
+        else:
+            missing.append(attr_id)
+    return min_v, max_v, missing
 
 
 # (cluster_id, attribute_id) -> ParameterUnit

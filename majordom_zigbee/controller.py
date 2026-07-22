@@ -11,7 +11,12 @@ from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
-from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
+from majordom_integration_sdk.schemas.parameter import (
+    ParameterDataType,
+    ParameterRole,
+    ParameterVisibility,
+    next_main_parameter_value,
+)
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
@@ -42,9 +47,11 @@ from .zigbee_spec import (
     SYSTEM_CLUSTERS,
     USER_READINGS,
     VISIBILITY_OVERRIDES,
+    MainParameterSpec,
     get_min_step,
     get_unit,
     is_metadata_attribute,
+    resolve_metadata_bounds,
 )
 
 log = logging.getLogger(__name__)
@@ -347,6 +354,19 @@ class ZigBeeController(AbstractController):
                         if hasattr(attribute.type, "max_value"):
                             max_value = attribute.type.max_value
 
+                        # Metadata priority 1: the device's own limit attributes (runtime values) win
+                        # over the wire-type default. cluster.get returns the cached sibling value.
+                        min_value, max_value, missing_bounds = resolve_metadata_bounds(
+                            cluster.cluster_id, attribute_id, cluster.get, min_value, max_value
+                        )
+                        for missing_attr in missing_bounds:
+                            log.debug(
+                                "[PAIR] metadata source %s not reported for %s — quirk or unsupported; "
+                                "using wire-type default",
+                                _zb_path(cluster=cluster, attr_id=missing_attr, attr_only=True),
+                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
+                            )
+
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
                             valid_values = {member.name: str(member.value) for member in attribute.type}
 
@@ -435,16 +455,19 @@ class ZigBeeController(AbstractController):
                             )
                         )
             device.parameters = parameters
-            main_parameter_id, default_arguments = self._get_device_main_parameter(device.id, zbdevice)
+            main_parameter_id, main_spec = self._get_device_main_parameter(device.id, zbdevice)
             device.main_parameter = main_parameter_id
-            if main_parameter_id and default_arguments is not None:
-                # Attach the default arguments to the chosen main parameter so a one-tap send
-                # works; drop the main parameter if the command wasn't actually exposed.
+            if main_parameter_id and main_spec is not None:
+                # Attach the one-tap send info to the chosen main parameter; drop the main parameter
+                # if the target command/attribute wasn't actually exposed.
                 main_parameter = next((p for p in parameters if p.id == main_parameter_id), None)
                 if main_parameter is None:
                     device.main_parameter = None
-                else:
-                    main_parameter.integration_data.default_arguments = default_arguments
+                elif main_spec.is_attribute:
+                    # Enum attribute main: store the cycle subset for the send path to rotate through.
+                    main_parameter.integration_data.main_cycle = main_spec.cycle
+                elif main_spec.default_arguments is not None:
+                    main_parameter.integration_data.default_arguments = main_spec.default_arguments
             log.debug(
                 f"[PAIR] mapped schema {_zb_path(device, zbdevice)}\n\t"
                 + "\n\t".join(
@@ -553,8 +576,23 @@ class ZigBeeController(AbstractController):
             if parameter.role != ParameterRole.control:
                 raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
             attr_id = parameter.integration_data.attribute_id
+            if command.value is not None:
+                value = command.value
+            else:
+                # Value-less send = the user tapped this attribute main parameter. For an enum,
+                # cycle through the curated subset (main_cycle) or the full valid_values; otherwise
+                # fall back to the parameter's stored default_value.
+                cycle = parameter.integration_data.main_cycle or sorted(parameter.valid_values or {})
+                if cycle:
+                    value = next_main_parameter_value(cluster.get(attr_id), cycle)
+                elif parameter.default_value is not None:
+                    value = int.from_bytes(parameter.default_value, "big", signed=True)
+                else:
+                    value = None
+                if value is None:
+                    raise ZBUnexpectedError(f"No value to send for main parameter '{parameter.name}'")
             try:
-                result = await cluster.write_attributes({attr_id: command.value})
+                result = await cluster.write_attributes({attr_id: value})
             except Exception as e:
                 raise ZBConnectionError(
                     f"[CMD] write_attributes transport error "
@@ -748,17 +786,22 @@ class ZigBeeController(AbstractController):
         self._majordom_discoveries.pop(discovery_id)
         self._awaiting_zb_discoveries.pop(discovery_id)
 
-    def _get_device_main_parameter(self, device_id: UUID, zbdevice: ZPDevice) -> tuple[UUID | None, dict | None]:
+    def _get_device_main_parameter(
+        self, device_id: UUID, zbdevice: ZPDevice
+    ) -> tuple[UUID | None, MainParameterSpec | None]:
         """Pick the parameter used for the device's one-tap action on the room view, in cluster
-        priority order (see MAIN_PARAMETER_BY_CLUSTER). Returns the parameter id and the default
-        arguments to send with it, or (None, None) if the device has no sensible one-tap action."""
+        priority order (see MAIN_PARAMETER_BY_CLUSTER). Returns the parameter id and its spec
+        (command or attribute main), or (None, None) if the device has no sensible one-tap action."""
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
                 if endpoint.in_clusters.get(cluster_id):
-                    return (
-                        self._mapper.command_parameter_uuid(
-                            device_id, endpoint.endpoint_id, cluster_id, spec.command_id
-                        ),
-                        spec.default_arguments,
-                    )
+                    if spec.is_attribute:
+                        param_id = self._mapper.attribute_parameter_uuid(
+                            device_id, endpoint.endpoint_id, cluster_id, spec.target_id
+                        )
+                    else:
+                        param_id = self._mapper.command_parameter_uuid(
+                            device_id, endpoint.endpoint_id, cluster_id, spec.target_id
+                        )
+                    return param_id, spec
         return None, None

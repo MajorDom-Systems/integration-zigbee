@@ -165,18 +165,35 @@ class UxSpec(NamedTuple):
 # zha unit strings / device_classes -> our ParameterUnit. Shared by the runtime quirk-v2 reader
 # and mirrored (standalone) in scripts/harvest_zha.py. Unmapped -> None (keep get_unit()).
 _ZHA_UNIT_BY_STRING: dict[str, ParameterUnit] = {
-    "°C": ParameterUnit.celsius, "%": ParameterUnit.percentage, "V": ParameterUnit.volt,
-    "A": ParameterUnit.ampere, "W": ParameterUnit.watt, "Hz": ParameterUnit.hertz,
-    "lx": ParameterUnit.lux, "kWh": ParameterUnit.kwh, "ppm": ParameterUnit.ppm,
-    "µg/m³": ParameterUnit.ugm3, "Pa": ParameterUnit.pascal, "hPa": ParameterUnit.pascal,
-    "kPa": ParameterUnit.pascal, "K": ParameterUnit.kelvin, "mired": ParameterUnit.mired,
-    "m³/h": ParameterUnit.m3h, "s": ParameterUnit.second,
+    "°C": ParameterUnit.celsius,
+    "%": ParameterUnit.percentage,
+    "V": ParameterUnit.volt,
+    "A": ParameterUnit.ampere,
+    "W": ParameterUnit.watt,
+    "Hz": ParameterUnit.hertz,
+    "lx": ParameterUnit.lux,
+    "kWh": ParameterUnit.kwh,
+    "ppm": ParameterUnit.ppm,
+    "µg/m³": ParameterUnit.ugm3,
+    "Pa": ParameterUnit.pascal,
+    "hPa": ParameterUnit.pascal,
+    "kPa": ParameterUnit.pascal,
+    "K": ParameterUnit.kelvin,
+    "mired": ParameterUnit.mired,
+    "m³/h": ParameterUnit.m3h,
+    "s": ParameterUnit.second,
 }
 _ZHA_UNIT_BY_DEVICE_CLASS: dict[str, ParameterUnit] = {
-    "temperature": ParameterUnit.celsius, "humidity": ParameterUnit.percentage,
-    "battery": ParameterUnit.percentage, "illuminance": ParameterUnit.lux,
-    "power": ParameterUnit.watt, "voltage": ParameterUnit.volt, "current": ParameterUnit.ampere,
-    "energy": ParameterUnit.kwh, "pressure": ParameterUnit.pascal, "frequency": ParameterUnit.hertz,
+    "temperature": ParameterUnit.celsius,
+    "humidity": ParameterUnit.percentage,
+    "battery": ParameterUnit.percentage,
+    "illuminance": ParameterUnit.lux,
+    "power": ParameterUnit.watt,
+    "voltage": ParameterUnit.volt,
+    "current": ParameterUnit.ampere,
+    "energy": ParameterUnit.kwh,
+    "pressure": ParameterUnit.pascal,
+    "frequency": ParameterUnit.hertz,
 }
 
 

@@ -17,7 +17,11 @@ class ZBAttributeUpdatedListener:
         parameter_id = self._controller._mapper.attribute_parameter_uuid(
             self._device_id, endpoint_id, cluster.cluster_id, attribute_id
         )
-        event = DeviceParameterChange(device_id=self._device_id, parameter_id=parameter_id, value=value)
+        event = DeviceParameterChange(
+            device_id=self._device_id,
+            parameter_id=parameter_id,
+            value=self._controller._mapper.normalize_zigbee_value(value),
+        )
 
         asyncio.create_task(
             self._controller.dependencies.output.controller_did_receive_events(self._controller, [event])

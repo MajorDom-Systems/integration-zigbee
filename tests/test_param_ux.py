@@ -73,11 +73,12 @@ def test_metadata_resolver_passthrough_when_no_source():
 
 def test_metadata_sources_point_at_real_metadata():
     # every declared source's target parameter is itself a real (non-metadata) reading key
-    for (cluster_id, attr_id) in METADATA_SOURCES:
+    for cluster_id, attr_id in METADATA_SOURCES:
         assert not is_metadata_attribute(cluster_id, attr_id, "measured_value")
 
 
 # --- classification ladder probes (see classify_attribute) --------------------------------------
+
 
 def test_our_override_beats_everything():
     # OnOff.on_off is in USER_READINGS -> our layer forces user/sensor, even though zha also has it.
@@ -103,8 +104,9 @@ def test_harvested_zha_applied_when_uncurated():
 def test_quirk_metadata_beats_zha():
     # a v2 quirk spec is honored above the harvested zha layer (but below our hand overrides)
     q = UxSpec(ParameterVisibility.setting, ParameterRole.control, None)
-    spec, source = classify_attribute(0x0008, 0x0010, "on_off_transition_time",
-                                      writable=True, reportable=False, quirk_ux=q)
+    spec, source = classify_attribute(
+        0x0008, 0x0010, "on_off_transition_time", writable=True, reportable=False, quirk_ux=q
+    )
     assert source == "quirk-v2"
     assert spec is q
 

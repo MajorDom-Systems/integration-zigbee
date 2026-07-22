@@ -29,21 +29,51 @@ _ZHA_VERSION = version("zha")
 
 # Platform modules whose import fires the @register_entity side effects into ENTITY_REGISTRY.
 _PLATFORMS = (
-    "sensor", "binary_sensor", "switch", "number", "select",
-    "climate", "lock", "cover", "fan", "light", "button", "siren",
+    "sensor",
+    "binary_sensor",
+    "switch",
+    "number",
+    "select",
+    "climate",
+    "lock",
+    "cover",
+    "fan",
+    "light",
+    "button",
+    "siren",
 )
 
 # zha unit strings / device_classes -> our ParameterUnit value. Anything unmapped -> "plain".
 _UNIT_BY_STRING = {
-    "°C": "celsius", "%": "percentage", "V": "volt", "A": "ampere", "W": "watt",
-    "Hz": "hertz", "lx": "lux", "kWh": "kwh", "ppm": "ppm", "µg/m³": "ugm3",
-    "Pa": "pascal", "hPa": "pascal", "kPa": "pascal", "K": "kelvin", "mired": "mired",
-    "m³/h": "m3h", "s": "second",
+    "°C": "celsius",
+    "%": "percentage",
+    "V": "volt",
+    "A": "ampere",
+    "W": "watt",
+    "Hz": "hertz",
+    "lx": "lux",
+    "kWh": "kwh",
+    "ppm": "ppm",
+    "µg/m³": "ugm3",
+    "Pa": "pascal",
+    "hPa": "pascal",
+    "kPa": "pascal",
+    "K": "kelvin",
+    "mired": "mired",
+    "m³/h": "m3h",
+    "s": "second",
 }
 _UNIT_BY_DEVICE_CLASS = {
-    "temperature": "celsius", "humidity": "percentage", "battery": "percentage",
-    "illuminance": "lux", "power": "watt", "voltage": "volt", "current": "ampere",
-    "energy": "kwh", "pressure": "pascal", "frequency": "hertz",
+    "temperature": "celsius",
+    "humidity": "percentage",
+    "battery": "percentage",
+    "illuminance": "lux",
+    "power": "watt",
+    "voltage": "volt",
+    "current": "ampere",
+    "energy": "kwh",
+    "pressure": "pascal",
+    "frequency": "hertz",
 }
 # Platforms that write the device (control) vs. read it (sensor).
 _CONTROL_PLATFORMS = {"switch", "number", "select", "climate", "lock", "cover", "fan", "light", "button", "siren"}

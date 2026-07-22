@@ -5,7 +5,7 @@ from uuid import UUID
 import zigpy.types as t
 from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole
 from zigpy.types import EUI64
-from zigpy.zcl.foundation import DataType, DataTypeId, ZCLAttributeAccess
+from zigpy.zcl.foundation import DataTypeId, ZCLAttributeAccess
 
 from .exceptions import ZBUnexpectedError
 
@@ -33,6 +33,28 @@ class ZigBeeMapper:
         if ieee is None:
             raise ZBUnexpectedError("Zigbee device is missing its IEEE address")
         return self._device_uuid(ieee)
+
+    def normalize_zigbee_value(self, value):
+        """Coerce zigpy wire values to plain python types for the SDK's typed encoder.
+
+        zigpy hands attribute values back as its own types — ``t.Bool`` is an int-enum (NOT a
+        python bool), enum8/16 and bitmaps are int-enums, ints/floats/strings are subclasses.
+        ``ParameterState.encode_value`` asserts exact python types, so coerce here — the single
+        choke point for both the fetch path and attribute reports.
+        """
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, t.Bool):
+            return bool(value)
+        if isinstance(value, Enum | Flag):
+            return int(value)  # zigpy ZCL enums/bitmaps are int-based
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, float):
+            return float(value)
+        if isinstance(value, str):
+            return str(value)
+        return value
 
     def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
         return self._parameter_uuid(device_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
@@ -89,7 +111,9 @@ class ZigBeeMapper:
 
         if type_id in {DataTypeId.unk, DataTypeId.nodata}:
             return ParameterDataType.none
-        if type_id == DataType.bool_:
+        # DataTypeId, not DataType — zigpy 2.0's DataType.bool_ is a rich descriptor that never
+        # equals a DataTypeId, which silently sent every bool attribute to the `none` fallthrough.
+        if type_id == DataTypeId.bool_:
             return ParameterDataType.bool
         if type_id in {DataTypeId.enum8, DataTypeId.enum16}:
             return ParameterDataType.enum

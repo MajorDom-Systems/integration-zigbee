@@ -597,7 +597,7 @@ class ZigBeeController(AbstractController):
                             parameter_id=self._mapper.attribute_parameter_uuid(
                                 device.id, endpoint.endpoint_id, cluster_id, attribute_id
                             ),
-                            value=attr_values.get(attribute_id),
+                            value=self._mapper.normalize_zigbee_value(attr_values.get(attribute_id)),
                         )
                     )
                 for command in cluster.commands:

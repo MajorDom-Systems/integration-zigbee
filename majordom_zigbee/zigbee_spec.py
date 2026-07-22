@@ -157,7 +157,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     # Color Control (0x0300)
     (0x0300, 0x0001): ParameterUnit.percentage,  # current_hue
     (0x0300, 0x0003): ParameterUnit.percentage,  # current_saturation
-    (0x0300, 0x0007): ParameterUnit.plain,  # color_temperature_mireds — TODO: add mired
+    (0x0300, 0x0007): ParameterUnit.mired,  # color_temperature_mireds
     (0x0300, 0x4010): ParameterUnit.plain,  # color_temp_physical_min_mireds
     (0x0300, 0x4011): ParameterUnit.plain,  # color_temp_physical_max_mireds
     (0x0300, 0x4012): ParameterUnit.plain,  # couple_color_temp_to_level_min_mireds
@@ -182,7 +182,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     (0x0403, 0x0011): ParameterUnit.pascal,
     (0x0403, 0x0012): ParameterUnit.pascal,
     # Flow Measurement (0x0404)
-    (0x0404, 0x0000): ParameterUnit.mps,  # m³/h — nearest kinematic
+    (0x0404, 0x0000): ParameterUnit.m3h,  # flow, m³/h
     (0x0404, 0x0001): ParameterUnit.mps,
     (0x0404, 0x0002): ParameterUnit.mps,
     # Relative Humidity (0x0405)
@@ -211,7 +211,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     (0x040D, 0x0001): ParameterUnit.ppm,
     (0x040D, 0x0002): ParameterUnit.ppm,
     # PM2.5 (0x042A)
-    (0x042A, 0x0000): ParameterUnit.ppm,  # µg/m³ — TODO: add ugm3
+    (0x042A, 0x0000): ParameterUnit.ugm3,  # PM2.5, µg/m³
     (0x042A, 0x0001): ParameterUnit.ppm,
     (0x042A, 0x0002): ParameterUnit.ppm,
     # Electrical Conductivity (0x040B)
@@ -265,7 +265,7 @@ ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
     # -------------------------
     # Metering (0x0702)
     # -------------------------
-    (0x0702, 0x0000): ParameterUnit.joule,  # current_summation_delivered — TODO: add kwh
+    (0x0702, 0x0000): ParameterUnit.kwh,  # current_summation_delivered
     (0x0702, 0x0001): ParameterUnit.joule,  # current_summation_received
     (0x0702, 0x0002): ParameterUnit.joule,  # current_max_demand_delivered
     (0x0702, 0x0003): ParameterUnit.joule,  # current_max_demand_received

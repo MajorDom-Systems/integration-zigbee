@@ -1,6 +1,8 @@
 from typing import Any, NamedTuple
 
-from majordom_integration_sdk.schemas.parameter import ParameterUnit, ParameterVisibility
+from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterUnit, ParameterVisibility
+
+from .zigbee_spec_zha import ZHA_ATTRIBUTE_UX
 
 
 class MainParameterSpec(NamedTuple):
@@ -147,6 +149,118 @@ def is_metadata_attribute(cluster_id: int, attribute_id: int, name: str) -> bool
     if (cluster_id, attribute_id) in METADATA_ATTRIBUTES:
         return True
     return name.endswith(_METADATA_NAME_SUFFIXES) or name in _METADATA_NAME_EXACT
+
+
+# --- The merged UX classification (priority ladder; see the zigbee README) --------------------
+# Every source of a parameter's (visibility, role, unit) judgment funnels through classify_attribute.
+# role/unit of None mean "keep what the caller derived from zigpy" (access flags / get_unit()).
+
+
+class UxSpec(NamedTuple):
+    visibility: ParameterVisibility
+    role: ParameterRole | None = None
+    unit: ParameterUnit | None = None
+
+
+# zha unit strings / device_classes -> our ParameterUnit. Shared by the runtime quirk-v2 reader
+# and mirrored (standalone) in scripts/harvest_zha.py. Unmapped -> None (keep get_unit()).
+_ZHA_UNIT_BY_STRING: dict[str, ParameterUnit] = {
+    "°C": ParameterUnit.celsius, "%": ParameterUnit.percentage, "V": ParameterUnit.volt,
+    "A": ParameterUnit.ampere, "W": ParameterUnit.watt, "Hz": ParameterUnit.hertz,
+    "lx": ParameterUnit.lux, "kWh": ParameterUnit.kwh, "ppm": ParameterUnit.ppm,
+    "µg/m³": ParameterUnit.ugm3, "Pa": ParameterUnit.pascal, "hPa": ParameterUnit.pascal,
+    "kPa": ParameterUnit.pascal, "K": ParameterUnit.kelvin, "mired": ParameterUnit.mired,
+    "m³/h": ParameterUnit.m3h, "s": ParameterUnit.second,
+}
+_ZHA_UNIT_BY_DEVICE_CLASS: dict[str, ParameterUnit] = {
+    "temperature": ParameterUnit.celsius, "humidity": ParameterUnit.percentage,
+    "battery": ParameterUnit.percentage, "illuminance": ParameterUnit.lux,
+    "power": ParameterUnit.watt, "voltage": ParameterUnit.volt, "current": ParameterUnit.ampere,
+    "energy": ParameterUnit.kwh, "pressure": ParameterUnit.pascal, "frequency": ParameterUnit.hertz,
+}
+
+
+def unit_from_zha(device_class: str | None, unit: str | None) -> ParameterUnit | None:
+    """Translate a zha/HA unit string or device_class to our ParameterUnit, or None if unknown."""
+    if unit and unit in _ZHA_UNIT_BY_STRING:
+        return _ZHA_UNIT_BY_STRING[unit]
+    if device_class and device_class in _ZHA_UNIT_BY_DEVICE_CLASS:
+        return _ZHA_UNIT_BY_DEVICE_CLASS[device_class]
+    return None
+
+
+def _our_attribute_ux() -> dict[tuple[int, int], UxSpec]:
+    """Our hand curation as UX overrides — the single highest static-priority source (a human's
+    call wins over harvested/quirk judgment). Built from the curated sets so there's one source
+    of truth per attribute."""
+    out: dict[tuple[int, int], UxSpec] = {}
+    for key in USER_READINGS:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.sensor)
+    for key in EVERYDAY_CONTROL_ATTRIBUTES:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.control)
+    for key, vis in VISIBILITY_OVERRIDES.items():
+        out[key] = UxSpec(vis)
+    return out
+
+
+OUR_ATTRIBUTE_UX: dict[tuple[int, int], UxSpec] = _our_attribute_ux()
+
+
+def _zha_uxspec(key: tuple[int, int]) -> UxSpec | None:
+    t = ZHA_ATTRIBUTE_UX.get(key)
+    if t is None:
+        return None
+    return UxSpec(ParameterVisibility(t[0]), ParameterRole(t[1]), ParameterUnit(t[2]))
+
+
+# Flip to True once harvested + quirk coverage is validated on real devices: unmatched attributes
+# then hide (system) instead of the reportable->user heuristic. See the zigbee README (fallback).
+_FALLBACK_HIDE_UNCURATED = False
+
+
+def classify_attribute(
+    cluster_id: int,
+    attribute_id: int,
+    name: str,
+    *,
+    writable: bool,
+    reportable: bool,
+    quirk_ux: UxSpec | None = None,
+) -> tuple[UxSpec, str]:
+    """Resolve an attribute's (visibility, role, unit) by the priority ladder, returning the spec
+    and a source tag (for logging / drift). Ladder, first match wins:
+
+      1. OUR_ATTRIBUTE_UX          — hand curation, a human's call wins over everything
+      2. metadata / manufacturer-on-system-cluster — forced system (safety)
+      3. quirk_ux                  — v2 QuirkBuilder entity metadata (runtime, device-specific)
+      4. ZHA_ATTRIBUTE_UX          — harvested standard-spec judgment
+      5. fallback policy           — heuristic; WARNS (uncurated attribute)
+    """
+    key = (cluster_id, attribute_id)
+
+    if (spec := OUR_ATTRIBUTE_UX.get(key)) is not None:
+        return spec, "ours"
+
+    if is_metadata_attribute(cluster_id, attribute_id, name):
+        return UxSpec(ParameterVisibility.system), "metadata"
+    # Manufacturer-specific attrs (>= 0xF000) on infrastructure clusters stay hidden.
+    if attribute_id >= 0xF000 and cluster_id in SYSTEM_CLUSTERS:
+        return UxSpec(ParameterVisibility.system), "mfr-on-system-cluster"
+
+    if quirk_ux is not None:
+        return quirk_ux, "quirk-v2"
+
+    if (spec := _zha_uxspec(key)) is not None:
+        return spec, "zha"
+
+    # 5. Fallback policy (uncurated) — WARNS. Kept as a heuristic until coverage is validated.
+    if _FALLBACK_HIDE_UNCURATED or cluster_id in SYSTEM_CLUSTERS:
+        return UxSpec(ParameterVisibility.system), "fallback-system"
+    if reportable and cluster_id not in CONFIG_HEAVY_CLUSTERS:
+        return UxSpec(ParameterVisibility.user), "fallback-reportable"
+    if writable:
+        return UxSpec(ParameterVisibility.setting), "fallback-writable"
+    return UxSpec(ParameterVisibility.system), "fallback-system"
 
 
 class MetadataSource(NamedTuple):

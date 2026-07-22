@@ -15,6 +15,7 @@ from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import (
     ParameterDataType,
     ParameterRole,
+    ParameterUnit,
     ParameterVisibility,
     next_main_parameter_value,
 )
@@ -41,18 +42,16 @@ from .model import (
     ZBParameterType,
 )
 from .zigbee_spec import (
-    CONFIG_HEAVY_CLUSTERS,
     EVERYDAY_COMMANDS,
-    EVERYDAY_CONTROL_ATTRIBUTES,
     MAIN_PARAMETER_BY_CLUSTER,
     SYSTEM_CLUSTERS,
-    USER_READINGS,
-    VISIBILITY_OVERRIDES,
     MainParameterSpec,
+    UxSpec,
+    classify_attribute,
     get_min_step,
     get_unit,
-    is_metadata_attribute,
     resolve_metadata_bounds,
+    unit_from_zha,
 )
 
 log = logging.getLogger(__name__)
@@ -66,6 +65,38 @@ _MAX_ATTRS_PER_REQUEST = 25
 _INTER_CHUNK_DELAY = 0.05
 
 _quirks_loaded = False
+
+
+_SETTING_ENTITY_TYPES = frozenset({"config", "diagnostic"})
+_SENSOR_PLATFORMS = frozenset({"sensor", "binary_sensor"})
+
+
+def quirk_ux_map(zbdevice: ZPDevice) -> dict[tuple[int, int, str], UxSpec]:
+    """Per-attribute UX judgment carried by a v2 QuirkBuilder, keyed (endpoint_id, cluster_id,
+    attribute_name). This is the runtime, device-specific tier of the classification ladder (above
+    harvested zha, below our hand overrides). Empty for non-quirked / v1-only devices.
+
+    entity_type (standard/config/diagnostic) -> visibility; entity_platform -> role; unit/
+    device_class -> ParameterUnit. Only metadata entries that target a single attribute are used.
+    """
+    quirk_def = getattr(zbdevice, "_quirk_definition", None)
+    if quirk_def is None:
+        return {}
+    out: dict[tuple[int, int, str], UxSpec] = {}
+    for meta in getattr(quirk_def, "entity_metadata", ()):
+        attr_name = getattr(meta, "attribute_name", None)
+        if not attr_name:
+            continue  # command buttons / composite entities carry no single attribute
+        entity_type = getattr(getattr(meta, "entity_type", None), "value", None)
+        platform = getattr(getattr(meta, "entity_platform", None), "value", None)
+        visibility = ParameterVisibility.setting if entity_type in _SETTING_ENTITY_TYPES else ParameterVisibility.user
+        role = ParameterRole.sensor if platform in _SENSOR_PLATFORMS else ParameterRole.control
+        unit = unit_from_zha(
+            getattr(getattr(meta, "device_class", None), "value", getattr(meta, "device_class", None)),
+            getattr(meta, "unit", None),
+        )
+        out[(meta.endpoint_id, meta.cluster_id, attr_name)] = UxSpec(visibility, role, unit)
+    return out
 
 
 def _ensure_quirks_loaded() -> None:
@@ -333,6 +364,8 @@ class ZigBeeController(AbstractController):
             if not device.integration_data.ieee:
                 device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
             parameters: list[ZBParameterState] = list()
+            # v2 QuirkBuilder entity judgment for this device (empty for non-quirked devices).
+            quirk_ux = quirk_ux_map(zbdevice)
             for endpoint in zbdevice.non_zdo_endpoints:
                 for cluster in endpoint.clusters:
                     for attribute_id, attribute in cluster.attributes.items():
@@ -341,28 +374,31 @@ class ZigBeeController(AbstractController):
 
                         value = b""
 
-                        # Visibility (see the parameter-visibility recipe in the docs). Curated
-                        # everyday controls and readings win; metadata (divisors/bounds) is hidden
-                        # even when reportable; otherwise reportable -> user, writable -> setting.
-                        # Manufacturer-specific attributes (>= 0xF000) on a system cluster stay hidden.
-                        key = (cluster.cluster_id, attribute_id)
-                        role = self._mapper.parse_zigbee_attribute_access(attribute.access)
-                        visibility = ParameterVisibility.system
-                        if key in VISIBILITY_OVERRIDES:
-                            visibility = VISIBILITY_OVERRIDES[key]
-                        elif attribute_id < 0xF000 or cluster.cluster_id not in SYSTEM_CLUSTERS:
-                            if is_metadata_attribute(cluster.cluster_id, attribute_id, attribute.name):
-                                visibility = ParameterVisibility.system  # scaling/bounds -> hidden metadata source
-                            elif key in EVERYDAY_CONTROL_ATTRIBUTES:
-                                visibility = ParameterVisibility.user
-                                role = ParameterRole.control  # force: zigpy under-declares (e.g. fan_mode)
-                            elif key in USER_READINGS or (
-                                attribute.access & ZCLAttributeAccess.Report
-                                and cluster.cluster_id not in CONFIG_HEAVY_CLUSTERS
-                            ):
-                                visibility = ParameterVisibility.user
-                            elif attribute.access & ZCLAttributeAccess.Write:
-                                visibility = ParameterVisibility.setting
+                        # Classification via the priority ladder (see the zigbee README): our hand
+                        # overrides > v2 quirk metadata > harvested zha judgment > fallback heuristic
+                        # (which warns). Metadata and manufacturer-on-system-cluster attrs are hidden.
+                        spec, source = classify_attribute(
+                            cluster.cluster_id,
+                            attribute_id,
+                            attribute.name,
+                            writable=bool(attribute.access & ZCLAttributeAccess.Write),
+                            reportable=bool(attribute.access & ZCLAttributeAccess.Report),
+                            quirk_ux=quirk_ux.get((endpoint.endpoint_id, cluster.cluster_id, attribute.name)),
+                        )
+                        visibility = spec.visibility
+                        role = (
+                            spec.role
+                            if spec.role is not None
+                            else self._mapper.parse_zigbee_attribute_access(attribute.access)
+                        )
+                        if source.startswith("fallback"):
+                            log.warning(
+                                "[PAIR] uncurated attribute %s -> %s (%s); add to OUR_ATTRIBUTE_UX "
+                                "or refresh the zha harvest",
+                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
+                                visibility.value,
+                                source,
+                            )
 
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
                         min_value = None
@@ -371,7 +407,10 @@ class ZigBeeController(AbstractController):
                         # matches Parameter.valid_values' declared type.
                         valid_values: dict[int | float | str, str] | None = None
                         min_step = get_min_step(cluster.cluster_id, attribute_id)
+                        # Our spec tables win; the harvested/quirk unit fills gaps get_unit() leaves plain.
                         unit = get_unit(cluster.cluster_id, attribute_id)
+                        if unit is ParameterUnit.plain and spec.unit is not None:
+                            unit = spec.unit
 
                         if hasattr(attribute.type, "min_value"):
                             min_value = attribute.type.min_value

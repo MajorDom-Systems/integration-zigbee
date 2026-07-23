@@ -39,7 +39,7 @@ class ZigBeeMapper:
 
         zigpy hands attribute values back as its own types — ``t.Bool`` is an int-enum (NOT a
         python bool), enum8/16 and bitmaps are int-enums, ints/floats/strings are subclasses.
-        ``ParameterState.encode_value`` asserts exact python types, so coerce here — the single
+        ``ParameterState`` values are pythonic, so coerce zigpys wire types here — the single
         choke point for both the fetch path and attribute reports.
         """
         if value is None or isinstance(value, bool):

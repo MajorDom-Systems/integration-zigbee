@@ -72,7 +72,8 @@ def test_attribute_main_cycle_stored_as_default_value():
         integration_data=ZBParameterIntegrationData(
             endpoint_id=1, cluster_id=0x0202, attribute_id=0x0000, type=ZBParameterType.attribute
         ),
-    ).with_default_value(set(spec.cycle))
+        default_value=set(spec.cycle),
+    )
 
     assert param.can_be_main_parameter
     assert param.main_cycle == [0x00, 0x04]  # only the curated off/on subset, not the full enum

@@ -373,7 +373,7 @@ class ZigBeeController(AbstractController):
                         if cluster.is_attribute_unsupported(attribute_id):
                             continue
 
-                        value = b""
+                        value = None
 
                         # Classification via the priority ladder (see the zigbee README): our hand
                         # overrides > v2 quirk metadata > harvested zha judgment > fallback heuristic
@@ -515,7 +515,7 @@ class ZigBeeController(AbstractController):
                                     command_id=command.id,
                                     type=ZBParameterType.command,
                                 ),
-                                value=b"",
+                                value=None,
                             )
                         )
             device.parameters = parameters
@@ -533,7 +533,7 @@ class ZigBeeController(AbstractController):
                     # (the relay derives the next value via Parameter.main_cycle). A spec with no
                     # explicit subset leaves the param to cycle its full valid_values, which the
                     # relay already derives, so there's nothing to set here.
-                    main_parameter.with_default_value(set(main_spec.cycle))
+                    main_parameter.default_value = set(main_spec.cycle)
                 elif main_spec.default_arguments is not None:
                     main_parameter.integration_data.default_arguments = main_spec.default_arguments
             log.debug(

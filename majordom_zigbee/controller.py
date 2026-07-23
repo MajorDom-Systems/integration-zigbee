@@ -642,16 +642,12 @@ class ZigBeeController(AbstractController):
             if command.value is not None:
                 value = command.value
             else:
-                # Value-less send = the user tapped this attribute main parameter. For an enum,
-                # cycle through the curated subset (main_cycle) or the full valid_values; otherwise
-                # fall back to the parameter's stored default_value.
-                cycle = parameter.integration_data.main_cycle or sorted(parameter.valid_values or {})
-                if cycle:
-                    value = next_main_parameter_value(cluster.get(attr_id), cycle)
-                elif parameter.default_value is not None:
-                    value = int.from_bytes(parameter.default_value, "big", signed=True)
-                else:
-                    value = None
+                # Value-less send = the user tapped this attribute main parameter (standalone
+                # mode — under the Hub the relay pre-derives the value). Cycle through the
+                # device-local curated subset first, else the SDK derivation (default_value
+                # set / valid_values / bool).
+                cycle = parameter.integration_data.main_cycle or parameter.main_cycle
+                value = next_main_parameter_value(cluster.get(attr_id), cycle) if cycle else None
                 if value is None:
                     raise ZBUnexpectedError(f"No value to send for main parameter '{parameter.name}'")
             try:

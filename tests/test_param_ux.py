@@ -61,6 +61,7 @@ def test_attribute_main_cycle_stored_as_default_value():
     from majordom_zigbee.model import ZBParameterIntegrationData, ZBParameterState, ZBParameterType
 
     spec = MAIN_PARAMETER_BY_CLUSTER[0x0202]
+    assert spec.cycle is not None
     param = ZBParameterState(
         id=uuid4(),
         name="fan_mode",

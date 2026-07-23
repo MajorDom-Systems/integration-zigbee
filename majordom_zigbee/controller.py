@@ -362,6 +362,8 @@ class ZigBeeController(AbstractController):
 
             if not device.integration_data.ieee:
                 device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
+            # Manufacturer-provided, read-only description — the ZCL model string.
+            device.description = zbdevice.model or None
             parameters: list[ZBParameterState] = list()
             # v2 QuirkBuilder entity judgment for this device (empty for non-quirked devices).
             quirk_ux = quirk_ux_map(zbdevice)

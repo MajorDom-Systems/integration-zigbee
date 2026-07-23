@@ -26,9 +26,6 @@ class ZBParameterIntegrationData(BaseModel):
     # carries *what to send*. send_command applies it when a command arrives with no value (i.e. the
     # user tapped the main parameter). Mirrors Matter's default_arguments.
     default_arguments: dict | None = None
-    # For an *attribute* main parameter (enum), the ordered subset of values a one-tap cycles
-    # through (e.g. [off, on] for a fan). None -> the send path cycles the param's full valid_values.
-    main_cycle: list[int] | None = None
 
 
 class ZBDevice(Device):

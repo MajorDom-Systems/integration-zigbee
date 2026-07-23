@@ -13,8 +13,9 @@ class MainParameterSpec(NamedTuple):
     - command main (default): ``target_id`` is a command id; ``default_arguments`` are sent with it
       (None = the command takes no arguments, e.g. OnOff.toggle).
     - attribute main (``is_attribute=True``): ``target_id`` is an attribute id; a tap writes it. For
-      an enum attribute (e.g. FanControl.fan_mode) the tap **cycles** through ``cycle`` (an ordered
-      value subset, e.g. off/on for a toggle) or the param's full valid_values when ``cycle`` is None.
+      an enum attribute (e.g. FanControl.fan_mode) ``cycle`` is the value subset the tap rotates
+      through (e.g. off/on for a toggle); it's stored on the parameter's ``default_value`` at
+      pairing so the relay derives the next value. ``None`` -> cycle the param's full valid_values.
     """
 
     target_id: int

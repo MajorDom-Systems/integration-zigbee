@@ -17,7 +17,6 @@ from majordom_integration_sdk.schemas.parameter import (
     ParameterRole,
     ParameterUnit,
     ParameterVisibility,
-    next_main_parameter_value,
 )
 from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
@@ -526,9 +525,13 @@ class ZigBeeController(AbstractController):
                 main_parameter = next((p for p in parameters if p.id == main_parameter_id), None)
                 if main_parameter is None:
                     device.main_parameter = None
-                elif main_spec.is_attribute:
-                    # Enum attribute main: store the cycle subset for the send path to rotate through.
-                    main_parameter.integration_data.main_cycle = main_spec.cycle
+                elif main_spec.is_attribute and main_spec.cycle:
+                    # Attribute main (e.g. fan_mode): a tap cycles through a value subset. Store it
+                    # as the parameter's default_value — the generic, relay-readable cycle source
+                    # (the relay derives the next value via Parameter.main_cycle). A spec with no
+                    # explicit subset leaves the param to cycle its full valid_values, which the
+                    # relay already derives, so there's nothing to set here.
+                    main_parameter.with_default_value(set(main_spec.cycle))
                 elif main_spec.default_arguments is not None:
                     main_parameter.integration_data.default_arguments = main_spec.default_arguments
             log.debug(
@@ -639,17 +642,11 @@ class ZigBeeController(AbstractController):
             if parameter.role != ParameterRole.control:
                 raise ZBUnexpectedError(f"Parameter '{parameter.name}' is not a control parameter")
             attr_id = parameter.integration_data.attribute_id
-            if command.value is not None:
-                value = command.value
-            else:
-                # Value-less send = the user tapped this attribute main parameter (standalone
-                # mode — under the Hub the relay pre-derives the value). Cycle through the
-                # device-local curated subset first, else the SDK derivation (default_value
-                # set / valid_values / bool).
-                cycle = parameter.integration_data.main_cycle or parameter.main_cycle
-                value = next_main_parameter_value(cluster.get(attr_id), cycle) if cycle else None
-                if value is None:
-                    raise ZBUnexpectedError(f"No value to send for main parameter '{parameter.name}'")
+            # The relay pre-derives a main-tap's value (bool / cycle / button) before dispatch, so
+            # an attribute write just sends it — the cycle logic lives in the relay, not here.
+            value = command.value
+            if value is None:
+                raise ZBUnexpectedError(f"No value to send for '{parameter.name}'")
             try:
                 result = await cluster.write_attributes({attr_id: value})
             except Exception as e:

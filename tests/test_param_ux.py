@@ -2,7 +2,9 @@
 re-hardcoding every device's expected parameters (that stays manual review; see the audit script
 and the docs recipe)."""
 
-from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterVisibility
+from uuid import uuid4
+
+from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 
 from majordom_zigbee.zigbee_spec import (
     CONFIG_HEAVY_CLUSTERS,
@@ -51,6 +53,29 @@ def test_fan_control_is_an_attribute_main_that_cycles():
     assert spec.is_attribute
     assert spec.target_id == 0x0000  # fan_mode
     assert spec.cycle == [0x00, 0x04]  # off <-> on toggle
+
+
+def test_attribute_main_cycle_stored_as_default_value():
+    # Pairing stores an attribute main's cycle subset on default_value (not integration_data), so
+    # the relay derives the next value via Parameter.main_cycle — the same path for every protocol.
+    from majordom_zigbee.model import ZBParameterIntegrationData, ZBParameterState, ZBParameterType
+
+    spec = MAIN_PARAMETER_BY_CLUSTER[0x0202]
+    param = ZBParameterState(
+        id=uuid4(),
+        name="fan_mode",
+        data_type=ParameterDataType.enum,
+        role=ParameterRole.control,
+        visibility=ParameterVisibility.user,
+        valid_values={0x00: "off", 0x01: "low", 0x02: "medium", 0x03: "high", 0x04: "on"},
+        integration_data=ZBParameterIntegrationData(
+            endpoint_id=1, cluster_id=0x0202, attribute_id=0x0000, type=ZBParameterType.attribute
+        ),
+    ).with_default_value(set(spec.cycle))
+
+    assert param.can_be_main_parameter
+    assert param.main_cycle == [0x00, 0x04]  # only the curated off/on subset, not the full enum
+    assert not hasattr(param.integration_data, "main_cycle")
 
 
 def test_metadata_resolver_prefers_device_limit_values():

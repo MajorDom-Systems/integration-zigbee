@@ -29,6 +29,20 @@ dependencies = [
     "zha-quirks (>=2.1.1,<3.0.0)",
 ]
 
+[project.optional-dependencies]
+# Extra coordinator radios. bellows (Silicon Labs EZSP) and zigpy-znp (TI Z-Stack) ship by
+# default; install the extra matching your dongle to switch backends with no source change, e.g.
+#   pip install 'majordom-zigbee[deconz]'
+# The backend is then picked by MAJORDOM_ZIGBEE_RADIO / auto-probe (see majordom_zigbee.radio).
+deconz = ["zigpy-deconz (>=0.25.5,<1.0.0)"]  # dresden elektronik ConBee/RaspBee
+xbee = ["zigpy-xbee (>=0.21.1,<1.0.0)"]  # Digi XBee
+zigate = ["zigpy-zigate (>=0.14.0,<1.0.0)"]  # ZiGate
+all-radios = [
+    "zigpy-deconz (>=0.25.5,<1.0.0)",
+    "zigpy-xbee (>=0.21.1,<1.0.0)",
+    "zigpy-zigate (>=0.14.0,<1.0.0)",
+]
+
 [project.urls]
 Homepage = "https://majordom.io"
 Documentation = "https://docs.majordom.io/device-integration"

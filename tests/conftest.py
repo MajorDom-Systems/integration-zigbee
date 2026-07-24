@@ -155,6 +155,7 @@ async def zigbee():
         patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
     ):
         controller = ZigBeeController(deps)
+        controller.radio = "ezsp"  # pin the backend in tests (don't probe the fake /dev/null port)
         await controller.start()
         created[0]._zb_controller = controller
         yield controller, output, repository, created[0]

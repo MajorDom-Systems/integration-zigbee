@@ -3731,7 +3731,13 @@ zigpy = ">=1.5.0"
 [package.extras]
 testing = ["pytest (>=7.3.1)", "pytest-asyncio (>=0.21.0)", "pytest-cov (>=4.1.0)", "pytest-mock (>=3.10.0)", "pytest-timeout (>=2.1.0)"]
 
+[extras]
+all-radios = ["zigpy-deconz", "zigpy-xbee", "zigpy-zigate"]
+deconz = ["zigpy-deconz"]
+xbee = ["zigpy-xbee"]
+zigate = ["zigpy-zigate"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "bb6ec004bdacfc72b34d8cd443294529501bcddbcf62ceced46f63b1b53dce60"
+content-hash = "8ffe6cb23b880240031906356de95727f51c339ec7c4cd2c64bddfb653142792"

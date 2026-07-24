@@ -42,6 +42,19 @@ at a serial path.
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
 CLI, watch mode, and the programmatic API.
 
+## Coordinator radios (backend-agnostic)
+
+The integration is radio-backend-agnostic: it picks the right `zigpy` radio library for the
+attached coordinator, so swapping dongles needs **no source change**.
+
+- **Bundled by default:** Silicon Labs EmberZNet/EZSP (`bellows` — SkyConnect, Sonoff ZBDongle-E)
+  and TI Z-Stack/ZNP (`zigpy-znp` — CC2652, Sonoff ZBDongle-P).
+- **Optional extras:** `pip install 'majordom-zigbee[deconz]'` (ConBee/RaspBee), `[xbee]` (Digi
+  XBee), `[zigate]` (ZiGate), or `[all-radios]`.
+- **Selecting the backend:** by default the attached dongle is **auto-probed**. Pin one explicitly
+  with the `MAJORDOM_ZIGBEE_RADIO` env var (`ezsp` / `znp` / `deconz` / `xbee` / `zigate`) or the
+  `ZigBeeController.radio` attribute. See `majordom_zigbee/radio.py`.
+
 ## About this integration
 
 - **Protocol / platform:** Zigbee via `zigpy` (with `bellows` / `zigpy-znp` radio libraries).

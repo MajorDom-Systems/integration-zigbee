@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 from enum import Enum
-from typing import ClassVar, Literal, cast, override
+from typing import Any, cast, override
 from uuid import UUID
 
 import zigpy.endpoint
@@ -40,6 +40,7 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
+from .radio import resolve_application
 from .zigbee_spec import (
     EVERYDAY_COMMANDS,
     MAIN_PARAMETER_BY_CLUSTER,
@@ -213,7 +214,10 @@ class ZigBeeController(AbstractController):
     is on the network the moment it joins the permit-join window. See readme.md.
     """
 
-    _ZIGBEE_STACK: ClassVar[Literal["bellows", "znp"]] = "bellows"
+    #: Pin a specific radio backend (see majordom_zigbee.radio: "ezsp"/"znp"/"deconz"/...). Left
+    #: None, the MAJORDOM_ZIGBEE_RADIO env var is consulted, and failing that the attached dongle
+    #: is auto-probed — so swapping coordinators needs no source change, only the matching library.
+    radio: str | None = None
 
     _zigbee_device_path: str
     _zigbe_db: str
@@ -264,7 +268,7 @@ class ZigBeeController(AbstractController):
         self._zigbee_device_path = self.dependencies.hardware_interfaces[0]
         self._zigbe_db = str(self.documents_folder / "zigbee.db")
         log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
-        config = {
+        config: dict[str, Any] = {
             CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
             CONF_DATABASE: self._zigbe_db,
         }
@@ -272,14 +276,11 @@ class ZigBeeController(AbstractController):
         # Register per-device quirks before the radio starts interviewing devices.
         _ensure_quirks_loaded()
 
-        # Starting zigbee stack
-        match self._ZIGBEE_STACK:
-            case "bellows":
-                from bellows.zigbee.application import ControllerApplication
-            case "znp":
-                from zigpy_znp.zigbee.application import ControllerApplication
+        # Resolve the radio backend for the attached coordinator (pinned, env, or auto-probed)
+        # and start its zigpy application. Backend-agnostic: no source change to swap dongles.
+        application_cls = await resolve_application(config[CONF_DEVICE], requested=self.radio)
         try:
-            self._application = await ControllerApplication.new(config=config, auto_form=True)
+            self._application = await application_cls.new(config=config, auto_form=True)
         except Exception as e:
             if "locked" in str(e).lower() or "permission" in str(e).lower():
                 holder = port_holder(self._zigbee_device_path)

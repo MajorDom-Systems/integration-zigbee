@@ -1,6 +1,6 @@
 [project]
 name = "majordom-zigbee"
-version = "0.1.4"
+version = "0.1.5"
 description = "Zigbee integration for MajorDom — bridges Zigbee devices into the MajorDom language."
 authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
 readme = "README.md"

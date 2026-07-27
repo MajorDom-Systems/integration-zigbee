@@ -18,20 +18,39 @@ import sys
 from majordom_integration_sdk.spec_drift import diff_specs
 from zigpy.zcl import Cluster
 
+from majordom_zigbee.mapper import ZigBeeMapper
 from majordom_zigbee.zigbee_spec_zha import ZHA_ATTRIBUTE_UX as COMMITTED
 from scripts.harvest_zha import harvest
 
+# parse_zigbee_data_type doesn't touch the uuid generators — pass no-ops so the report classifies
+# data types with the exact same logic the runtime mapper uses.
+_MAPPER = ZigBeeMapper(device_uuid=lambda _s: None, parameter_uuid=lambda _d, _s: None)  # type: ignore[arg-type,return-value]
+
+
+def _mapped_data_type(attr: object) -> str:
+    """MajorDom ``ParameterDataType`` for a zigpy attribute, via the runtime mapper. The unit in the
+    harvested tuple is HA's semantic judgment; this is the orthogonal ZCL wire-type axis zigpy
+    supplies. ``"unknown"`` when zigpy resolves the id but not a classifiable type."""
+    zcl_type = getattr(attr, "zcl_type", None) or getattr(attr, "type", None)
+    if zcl_type is None:
+        return "unknown"
+    try:
+        return _MAPPER.parse_zigbee_data_type(zcl_type).value
+    except Exception:  # noqa: BLE001 - a type lookup must never break the drift report
+        return "unknown"
+
 
 def _key_label(key: tuple[int, int]) -> str:
-    """Resolve a ``(cluster_id, attribute_id)`` key to ``cluster.attribute`` via the zigpy ZCL
-    registry, so the drift PR names what changed (``temperature.measured_value``) instead of only
-    ``(1026, 0)``. Falls back to the hex id for anything zigpy doesn't know."""
+    """Resolve a ``(cluster_id, attribute_id)`` key to ``cluster.attribute [data_type]`` via the
+    zigpy ZCL registry, so the drift PR names what changed (``temperature.measured_value [integer]``)
+    instead of only ``(1026, 0)``. Falls back to the hex id / ``unknown`` for anything zigpy can't
+    classify."""
     cid, aid = key
     cluster = Cluster._registry.get(cid)
     cluster_name = getattr(cluster, "ep_attribute", None) or getattr(cluster, "name", None) or f"0x{cid:04x}"
     attr = getattr(cluster, "attributes", {}).get(aid) if cluster is not None else None
     attr_name = getattr(attr, "name", None) or f"0x{aid:04x}"
-    return f"{cluster_name}.{attr_name}"
+    return f"{cluster_name}.{attr_name} [{_mapped_data_type(attr)}]"
 
 
 def main() -> int:

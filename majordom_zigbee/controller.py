@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from enum import Enum
 from typing import Any, cast, override
 from uuid import UUID
@@ -291,6 +292,14 @@ class ZigBeeController(AbstractController):
             raise
         self._application.add_listener(self)
         log.debug("[READY] connected to %s", self._zigbee_device_path)
+
+        # Optionally cap the coordinator's TX power (e.g. RF-quiet cage/hardware testing). Unset =
+        # radio default (full power, for a real home). The radio clamps to its floor.
+        tx_dbm = os.environ.get("MAJORDOM_ZIGBEE_TX_DBM")
+        if tx_dbm:
+            with contextlib.suppress(Exception):
+                await self._application.set_tx_power(int(tx_dbm))
+                log.info("[RADIO] Zigbee TX power set to %s dBm (clamps to radio min)", tx_dbm)
 
         async with self.dependencies.make_device_repository() as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices

@@ -26,7 +26,7 @@ dependencies = [
     # zha-quirks (zhaquirks) applies per-device quirks at the zigpy layer: it decodes
     # manufacturer clusters into named/typed attributes and carries v2 entity metadata.
     # Requires zigpy>=2.0, which is why the stack was bumped off the 0.88 line.
-    "zha-quirks (>=2.1.1,<3.0.0)",
+    "zha-quirks (>=2.2.0,<3.0.0)",
 ]
 
 [project.optional-dependencies]

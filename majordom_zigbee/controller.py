@@ -352,7 +352,7 @@ class ZigBeeController(AbstractController):
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(self, duration_sec: int) -> None:
+    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
         log.debug("[PERMIT-JOIN] opening for %ds", duration_sec)

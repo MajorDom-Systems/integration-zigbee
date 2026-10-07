@@ -267,15 +267,17 @@ async def test_attribute_enum_valid_values_map_value_to_label(zigbee, monkeypatc
     device = await _device(repository, discovery.id)
     fan_mode_id = Fan.AttributeDefs.fan_mode.id
     param_id = str(controller._mapper.attribute_parameter_uuid(discovery.id, 1, Fan.cluster_id, fan_mode_id))
-    fan_mode = await _param(repository, discovery.id, param_id)
+    stored = await _param(repository, discovery.id, param_id)
+    fan_mode = ZBParameter.model_validate(stored.model_dump(mode="json"))  # the stored round trip
 
-    assert fan_mode.valid_values == {member.value: member.name for member in Fan.FanMode}
+    valid_values = fan_mode.valid_values
+    assert valid_values is not None
+    assert valid_values == {member.value: member.name for member in Fan.FanMode}
     # a reported value and the main off/on cycle both land on valid_values keys
-    assert controller._mapper.normalize_zigbee_value(Fan.FanMode.On) in fan_mode.valid_values
+    assert controller._mapper.normalize_zigbee_value(Fan.FanMode.On) in valid_values
     assert str(device.main_parameter) == param_id
-    assert fan_mode.default_value is not None
-    assert set(fan_mode.default_value) == {Fan.FanMode.Off.value, Fan.FanMode.On.value}
-    assert set(fan_mode.default_value) <= set(fan_mode.valid_values)
+    assert fan_mode.main_cycle == [Fan.FanMode.Off.value, Fan.FanMode.On.value]
+    assert set(fan_mode.main_cycle or ()) <= set(valid_values)
 
     write_mock = cast(AsyncMock, zigpy.zcl.Cluster.write_attributes)
     write_mock.reset_mock()

@@ -35,6 +35,7 @@ NCP_IEEE = t.EUI64.convert("aa:11:22:bb:33:44:be:ef")
 DEVICE_ID = "3ad0d5e0-e32d-5b43-ac8f-150aa969c63d"
 PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"  # toggle command_1/6/2
 PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"  # on_time attribute_1/6/16385 (Read|Write)
+MOCK_INPUT_CLUSTERS: list[int] = [6, 8]  # OnOff, LevelControl; tests may monkeypatch it
 
 
 def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.device.Device:
@@ -58,8 +59,8 @@ def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.
     ep.status = zigpy.endpoint.Status.ZDO_INIT
     ep.profile_id = 260
     ep.device_type = zigpy.profiles.zha.DeviceType.ON_OFF_LIGHT
-    ep.add_input_cluster(6)  # OnOff
-    ep.add_input_cluster(8)  # LevelControl
+    for cluster_id in MOCK_INPUT_CLUSTERS:
+        ep.add_input_cluster(cluster_id)
     return dev
 
 

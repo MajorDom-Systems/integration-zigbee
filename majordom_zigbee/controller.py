@@ -24,7 +24,7 @@ from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
 from zigpy.zcl.foundation import Status as ZCLStatus
-from zigpy.zcl.foundation import ZCLAttributeAccess, ZCLAttributeDef
+from zigpy.zcl.foundation import ZCLAttributeAccess, ZCLAttributeDef, ZCLCommandDef
 
 from majordom_zigbee._serial import port_holder
 
@@ -442,7 +442,7 @@ class ZigBeeController(AbstractController):
                             )
 
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
-                            valid_values = {member.name: str(member.value) for member in attribute.type}
+                            valid_values = {member.value: member.name for member in attribute.type}
 
                         parameters.append(
                             ZBParameterState(
@@ -490,7 +490,7 @@ class ZigBeeController(AbstractController):
                             if hasattr(field.type, "max_value"):
                                 max_value = field.type.max_value
                             if isinstance(field.type, type) and issubclass(field.type, Enum):
-                                valid_values = {member.name: str(member.value) for member in field.type}
+                                valid_values = {member.value: member.name for member in field.type}
 
                             fields.append(
                                 Parameter(
@@ -513,7 +513,7 @@ class ZigBeeController(AbstractController):
                                     device.id, endpoint.endpoint_id, cluster.cluster_id, command.id
                                 ),
                                 name=command.name,
-                                data_type=ParameterDataType.none,
+                                data_type=ParameterDataType.struct if fields else ParameterDataType.none,
                                 role=ParameterRole.control,
                                 fields=json.loads(json.dumps([f.model_dump(mode="json") for f in fields]))
                                 if fields
@@ -545,7 +545,18 @@ class ZigBeeController(AbstractController):
                     # relay already derives, so there's nothing to set here.
                     main_parameter.default_value = set(main_spec.cycle)
                 elif main_spec.default_arguments is not None:
-                    main_parameter.integration_data.default_arguments = main_spec.default_arguments
+                    data = main_parameter.integration_data
+                    data.default_arguments = main_spec.default_arguments
+                    # The same arguments keyed by sub-parameter id (the SDK struct value) as a one-value
+                    # button: a `struct` command then passes can_be_main_parameter and the relay sends
+                    # them on a tap. default_arguments stays for devices stored before this.
+                    endpoint = cast(zigpy.endpoint.Endpoint, zbdevice.endpoints[data.endpoint_id])
+                    zbcommand = endpoint.in_clusters[data.cluster_id].server_commands[main_spec.target_id]
+                    names = self._command_field_names(device.id, data.endpoint_id, data.cluster_id, zbcommand)
+                    ids = {name: field_id for field_id, name in names.items()}
+                    main_parameter.default_value = {
+                        ids.get(name, name): value for name, value in main_spec.default_arguments.items()
+                    }
             log.debug(
                 f"[PAIR] mapped schema {_zb_path(device, zbdevice)}\n\t"
                 + "\n\t".join(
@@ -682,6 +693,13 @@ class ZigBeeController(AbstractController):
             # A value-less send (e.g. tapping the main parameter) falls back to the arguments this
             # command was set up with as a main parameter — see integration_data.default_arguments.
             arguments = command.value if command.value is not None else parameter.integration_data.default_arguments
+            if isinstance(arguments, dict):
+                # A struct value is keyed by sub-parameter id (SDK), zigpy takes field names. Name
+                # keys (e.g. default_arguments) pass through as-is.
+                names = self._command_field_names(
+                    device.id, parameter.integration_data.endpoint_id, parameter.integration_data.cluster_id, zbcommand
+                )
+                arguments = {names.get(str(key), str(key)): value for key, value in arguments.items()}
             try:
                 if isinstance(arguments, dict):
                     result = await cluster.command(zbcommand.id, **arguments)
@@ -853,6 +871,16 @@ class ZigBeeController(AbstractController):
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)
         self._awaiting_zb_discoveries.pop(discovery_id)
+
+    def _command_field_names(
+        self, device_id: UUID, endpoint_id: int, cluster_id: int, zbcommand: ZCLCommandDef
+    ) -> dict[str, str]:
+        """Sub-parameter id (as str) -> zigpy field name, for a command parameter's fields."""
+        fields = enumerate(zbcommand.schema.fields)
+        return {
+            str(self._mapper.command_field_uuid(device_id, endpoint_id, cluster_id, zbcommand.id, i)): field.name
+            for i, field in fields
+        }
 
     def _get_device_main_parameter(
         self, device_id: UUID, zbdevice: ZPDevice

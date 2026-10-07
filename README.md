@@ -65,9 +65,10 @@ attached coordinator, so swapping dongles needs **no source change**.
   and TI Z-Stack/ZNP (`zigpy-znp` — CC2652, Sonoff ZBDongle-P).
 - **Optional extras:** `pip install 'majordom-zigbee[deconz]'` (ConBee/RaspBee), `[xbee]` (Digi
   XBee), `[zigate]` (ZiGate), or `[all-radios]`.
-- **Selecting the backend:** by default the attached dongle is **auto-probed**. Pin one explicitly
-  with the `MAJORDOM_ZIGBEE_RADIO` env var (`ezsp` / `znp` / `deconz` / `xbee` / `zigate`) or the
-  `ZigBeeController.radio` attribute. See `majordom_zigbee/radio.py`.
+- **Selecting the backend:** the controller declares `needs = [Need("zigbee")]`; the hub binds a
+  `zigbee` link whose dialect (`ezsp` / `znp` / `deconz` / `xbee` / `zigate` / `cc`) picks the
+  library, or `auto` to probe. `ZigBeeController.probe(path)` recognises unknown sticks for the
+  hub. See `majordom_zigbee/radio.py`.
 
 ## About this integration
 
@@ -79,8 +80,8 @@ attached coordinator, so swapping dongles needs **no source change**.
 ### Required harness
 
 - **Hardware adapters:** a Zigbee coordinator radio (SkyConnect / ConBee / a `zigpy`-supported
-  dongle) — the Hub assigns its OS device path via `dependencies.hardware_interfaces`
-  (e.g. `/dev/ttyACM0`).
+  dongle) — the Hub hands it over as `dependencies.links["zigbee"]` (a path, or
+  `socket://…` when a multi-PAN service fronts the radio).
 - **Third-party software services:** none — `zigpy` speaks to the radio directly.
 - **OS / permissions:** serial-port access to the radio.
 

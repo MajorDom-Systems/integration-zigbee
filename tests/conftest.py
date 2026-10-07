@@ -16,6 +16,7 @@ import zigpy.profiles
 import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
+from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
 from majordom_integration_sdk.testing import (
@@ -149,7 +150,7 @@ async def zigbee():
         zeroconf_discovery_service=FakeZeroconfDiscoveryService(),
         ssdp_discovery_service=FakeSSDPDiscoveryService(),
         ble_discovery_service=FakeBLEDiscoveryService(),
-        hardware_interfaces=["/dev/null"],
+        links={"zigbee": Endpoint("zigbee", "ezsp", "/dev/null")},  # pinned backend: no probing of /dev/null
     )
 
     with (
@@ -159,7 +160,6 @@ async def zigbee():
         patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
     ):
         controller = ZigBeeController(deps)
-        controller.radio = "ezsp"  # pin the backend in tests (don't probe the fake /dev/null port)
         await controller.start()
         created[0]._zb_controller = controller
         yield controller, output, repository, created[0]

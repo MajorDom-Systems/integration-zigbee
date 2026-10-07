@@ -2,13 +2,13 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 from enum import Enum
 from typing import Any, cast, override
 from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
+from majordom_integration_sdk import Endpoint, Need
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
@@ -19,7 +19,18 @@ from majordom_integration_sdk.schemas.parameter import (
     ParameterUnit,
     ParameterVisibility,
 )
-from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
+from pydantic import BaseModel, Field
+from zigpy.config import (
+    CONF_DATABASE,
+    CONF_DEVICE,
+    CONF_DEVICE_PATH,
+    CONF_NWK,
+    CONF_NWK_CHANNEL,
+    CONF_NWK_EXTENDED_PAN_ID,
+    CONF_NWK_KEY,
+    CONF_NWK_PAN_ID,
+    CONF_NWK_TX_POWER,
+)
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
@@ -41,7 +52,7 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .radio import resolve_application
+from .radio import detect, resolve_application
 from .zigbee_spec import (
     EVERYDAY_COMMANDS,
     MAIN_PARAMETER_BY_CLUSTER,
@@ -209,6 +220,16 @@ def _check_zcl_failures(
         log.error(f"{log_prefix} ZCL failures:\n\t{details}")
 
 
+class ZigBeeSettings(BaseModel):
+    channel: int | None = Field(None, ge=11, le=26, title="Channel", description="Empty picks one when forming.")
+    pan_id: int | None = Field(None, ge=0, le=0xFFFE, title="PAN ID", description="Empty generates one when forming.")
+    extended_pan_id: str | None = Field(
+        None, title="Extended PAN ID", description="Like dd:dd:dd:dd:dd:dd:dd:dd. Empty generates one when forming."
+    )
+    network_key: str | None = Field(None, title="Network key", description="32 hex digits. Empty generates one.")
+    tx_power: int | None = Field(None, title="Transmit power, dBm", description="Empty uses the radio default.")
+
+
 class ZigBeeController(AbstractController):
     """Bridges the Hub to Zigbee devices through a USB coordinator radio via zigpy.
 
@@ -217,10 +238,8 @@ class ZigBeeController(AbstractController):
     is on the network the moment it joins the permit-join window. See readme.md.
     """
 
-    #: Pin a specific radio backend (see majordom_zigbee.radio: "ezsp"/"znp"/"deconz"/...). Left
-    #: None, the MAJORDOM_ZIGBEE_RADIO env var is consulted, and failing that the attached dongle
-    #: is auto-probed — so swapping coordinators needs no source change, only the matching library.
-    radio: str | None = None
+    needs = [Need("zigbee")]  # any zigpy dialect: ezsp, znp, deconz, xbee, zigate, cc
+    settings = ZigBeeSettings
 
     _zigbee_device_path: str
     _zigbe_db: str
@@ -267,21 +286,35 @@ class ZigBeeController(AbstractController):
     # Lifecycle
     # -------------------------------------------------------------------------
 
+    @classmethod
+    async def probe(cls, path: str) -> Endpoint | None:
+        found = await detect({CONF_DEVICE_PATH: path})
+        return Endpoint("zigbee", found[0].key, path) if found else None
+
     async def start(self):
-        self._zigbee_device_path = self.dependencies.hardware_interfaces[0]
+        link = self.dependencies.links["zigbee"]
+        settings = cast(ZigBeeSettings, self.dependencies.settings or ZigBeeSettings())
+        self._zigbee_device_path = link.url
         self._zigbe_db = str(self.documents_folder / "zigbee.db")
         log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
+        network = {
+            CONF_NWK_CHANNEL: settings.channel,
+            CONF_NWK_PAN_ID: settings.pan_id,
+            CONF_NWK_EXTENDED_PAN_ID: settings.extended_pan_id,
+            CONF_NWK_KEY: list(bytes.fromhex(settings.network_key)) if settings.network_key else None,
+            CONF_NWK_TX_POWER: settings.tx_power,
+        }
         config: dict[str, Any] = {
             CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
             CONF_DATABASE: self._zigbe_db,
+            CONF_NWK: {key: value for key, value in network.items() if value is not None},
         }
 
         # Register per-device quirks before the radio starts interviewing devices.
         _ensure_quirks_loaded()
 
-        # Resolve the radio backend for the attached coordinator (pinned, env, or auto-probed)
-        # and start its zigpy application. Backend-agnostic: no source change to swap dongles.
-        application_cls = await resolve_application(config[CONF_DEVICE], requested=self.radio)
+        # Start the zigpy application of the radio library the bound dialect names.
+        application_cls = await resolve_application(config[CONF_DEVICE], requested=link.dialect)
         try:
             self._application = await application_cls.new(config=config, auto_form=True)
         except Exception as e:
@@ -294,14 +327,6 @@ class ZigBeeController(AbstractController):
             raise
         self._application.add_listener(self)
         log.debug("[READY] connected to %s", self._zigbee_device_path)
-
-        # Optionally cap the coordinator's TX power (e.g. RF-quiet cage/hardware testing). Unset =
-        # radio default (full power, for a real home). The radio clamps to its floor.
-        tx_dbm = os.environ.get("MAJORDOM_ZIGBEE_TX_DBM")
-        if tx_dbm:
-            with contextlib.suppress(Exception):
-                await self._application.set_tx_power(int(tx_dbm))
-                log.info("[RADIO] Zigbee TX power set to %s dBm (clamps to radio min)", tx_dbm)
 
         async with self.dependencies.make_device_repository() as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices

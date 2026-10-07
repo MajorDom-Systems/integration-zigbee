@@ -5,8 +5,10 @@ import types
 from unittest.mock import AsyncMock
 
 import pytest
+from majordom_integration_sdk import Endpoint
 
 from majordom_zigbee import radio as radio_mod
+from majordom_zigbee.controller import ZigBeeController
 
 
 def _fake_radio_module(monkeypatch, dotted_path: str, probe_result):
@@ -48,15 +50,6 @@ async def test_unknown_radio_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_env_var_pins_radio(monkeypatch):
-    znp = next(r for r in radio_mod.RADIOS if r.key == "znp")
-    app = _fake_radio_module(monkeypatch, znp.application, probe_result=True)
-    monkeypatch.setenv(radio_mod.RADIO_ENV, "znp")
-    resolved = await radio_mod.resolve_application({"path": "/dev/x"}, requested=None)
-    assert resolved is app
-
-
-@pytest.mark.asyncio
 async def test_auto_probe_picks_first_matching(monkeypatch):
     # ezsp probe fails (raises), znp probe matches -> znp is chosen.
     ezsp = next(r for r in radio_mod.RADIOS if r.key == "ezsp")
@@ -68,6 +61,6 @@ async def test_auto_probe_picks_first_matching(monkeypatch):
     for r in radio_mod.RADIOS:
         if r.key not in ("ezsp", "znp"):
             monkeypatch.setitem(sys.modules, r.application.rpartition(".")[0], None)
-    monkeypatch.delenv(radio_mod.RADIO_ENV, raising=False)
     resolved = await radio_mod.resolve_application({"path": "/dev/x"}, requested="auto")
     assert resolved is znp_app
+    assert (await ZigBeeController.probe("/dev/x")) == Endpoint("zigbee", "znp", "/dev/x")

@@ -6,9 +6,9 @@ default (`znp`/Texas Instruments is selectable via `_ZIGBEE_STACK`). zigpy owns 
 network, the ZCL, and device interviews; this integration adapts it to the Hub's
 `AbstractController` contract.
 
-The radio's serial port comes from `dependencies.hardware_interfaces[0]` (overridable via
-the `ZIGBEE_DEVICE_PATH` env var); zigpy's device database lives under the integration's
-`documents_folder` as `zigbee.db`.
+The radio comes from `dependencies.links["zigbee"]` (path and zigpy dialect), the network and
+transmit power from `dependencies.settings` (`ZigBeeSettings`); zigpy's device database lives
+under the integration's `documents_folder` as `zigbee.db`.
 
 ## Files
 

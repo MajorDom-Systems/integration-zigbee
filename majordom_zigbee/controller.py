@@ -772,6 +772,13 @@ class ZigBeeController(AbstractController):
     # Device -> Hub: Zigbee network events (zigpy listener) & availability
     # -------------------------------------------------------------------------
 
+    def connection_lost(self, exc: Exception):
+        """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
+        reconnect by itself: tell the hub, which restarts the integration."""
+        log.warning("[RADIO] connection lost: %r", exc)
+        message = "Lost the connection to the Zigbee radio."
+        self._create_task(self.dependencies.output.controller_did_encounter_error(self, message, still_running=False))
+
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""
         log.debug("[JOIN] ieee=%s  nwk=0x%04X", device.ieee, device.nwk)

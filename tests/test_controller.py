@@ -337,3 +337,11 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     await controller.send_command(
         DeviceCommand(device_id=discovery.id, parameter_id=UUID(toggle_id), value=None), device, toggle
     )
+
+
+async def test_reports_a_lost_radio_so_the_hub_restarts_it(zigbee):
+    controller, output, _repo, _app = zigbee
+    controller.connection_lost(ConnectionResetError("service restarted"))
+
+    await _wait_for(lambda: bool(output.errors))
+    assert output.errors[-1] == ("Lost the connection to the Zigbee radio.", False)

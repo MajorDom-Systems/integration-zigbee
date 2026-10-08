@@ -51,7 +51,7 @@ the controller with the SDK's test doubles against a simulated `zigpy` device �
 `majordom-zigbee` is a standalone library — import it into your own app, or run **just this
 integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
 It needs a Zigbee coordinator radio (a SkyConnect, ConBee, or a zigpy-znp/bellows-supported dongle)
-at a serial path.
+at a serial path: pass it as `links={"zigbee": Endpoint("zigbee", "ezsp", "/dev/ttyUSB0")}`.
 
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
 CLI, watch mode, and the programmatic API.
@@ -77,12 +77,18 @@ attached coordinator, so swapping dongles needs **no source change**.
 - **Supported devices:** Zigbee Home Automation devices — lights, plugs, switches, sensors.
 - **Credentials needed to pair:** none — devices join during an explicit pairing window.
 
-### Required harness
+### Needs
 
-- **Hardware adapters:** a Zigbee coordinator radio (SkyConnect / ConBee / a `zigpy`-supported
-  dongle) — the Hub hands it over as `dependencies.links["zigbee"]` (a path, or
-  `socket://…` when a multi-PAN service fronts the radio).
-- **Third-party software services:** none — `zigpy` speaks to the radio directly.
+| Capability | Required | Provided by |
+|------------|----------|-------------|
+| `zigbee` (any dialect: `ezsp`, `znp`, `deconz`, `xbee`, `zigate`, `cc`) | yes | a Silicon Labs stick with Zigbee firmware, a stick `ZigBeeController.probe()` recognises, or the hub's `multiprotocol` service on a multi-PAN stick |
+
+The Hub hands it over as `dependencies.links["zigbee"]`: a serial path, or `socket://…` when the
+`multiprotocol` service fronts the radio.
+
+- **Services it brings:** none — `zigpy` speaks to the radio directly.
+- **Settings:** channel, PAN ID, extended PAN ID, network key and transmit power (`ZigBeeSettings`);
+  empty values are picked or generated when the network is formed.
 - **OS / permissions:** serial-port access to the radio.
 
 ### Protocol stack (OSI)

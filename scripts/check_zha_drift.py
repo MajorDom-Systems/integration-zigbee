@@ -14,6 +14,7 @@ Run: python scripts/check_zha_drift.py
 from __future__ import annotations
 
 import sys
+from uuid import UUID
 
 from majordom_integration_sdk.spec_drift import diff_specs
 from zigpy.zcl import Cluster
@@ -24,7 +25,8 @@ from scripts.harvest_zha import harvest
 
 # parse_zigbee_data_type doesn't touch the uuid generators — pass no-ops so the report classifies
 # data types with the exact same logic the runtime mapper uses.
-_MAPPER = ZigBeeMapper(device_uuid=lambda _s: None, parameter_uuid=lambda _d, _s: None)  # type: ignore[arg-type,return-value]
+_NIL = UUID(int=0)
+_MAPPER = ZigBeeMapper(device_uuid=lambda _s: _NIL, parameter_uuid=lambda _d, _s: _NIL)
 
 
 def _mapped_data_type(attr: object) -> str:

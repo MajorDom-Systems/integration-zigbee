@@ -935,6 +935,7 @@ class ZigBeeController(AbstractController):
         if discovery_id not in self._majordom_discoveries and discovery_id in self._connected_devices:
             # if the device was connected
             return
+        log.info("[REMOVE] %s wasn't paired within 5 minutes: removing it from the network", ieee)
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)
         self._awaiting_zb_discoveries.pop(discovery_id)

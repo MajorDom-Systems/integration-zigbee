@@ -227,7 +227,9 @@ class ZigBeeSettings(BaseModel):
         None, title="Extended PAN ID", description="Like dd:dd:dd:dd:dd:dd:dd:dd. Empty generates one when forming."
     )
     network_key: str | None = Field(None, title="Network key", description="32 hex digits. Empty generates one.")
-    tx_power: int | None = Field(None, title="Transmit power, dBm", description="Empty uses the radio default.")
+    tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
+        None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
+    )
 
 
 class ZigBeeController(AbstractController):

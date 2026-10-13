@@ -372,6 +372,7 @@ class ZigBeeController(AbstractController):
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         if self._application:
+            self._application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
             await self._application.shutdown()
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()

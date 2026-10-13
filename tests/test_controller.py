@@ -1,5 +1,6 @@
 """Unit tests driving ZigBeeController directly against the in-memory zigpy stub."""
 
+import asyncio
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
@@ -345,3 +346,15 @@ async def test_reports_a_lost_radio_so_the_hub_restarts_it(zigbee):
 
     await _wait_for(lambda: bool(output.errors))
     assert output.errors[-1] == ("Lost the connection to the Zigbee radio.", False)
+
+
+async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
+    controller, output, _repo, app = zigbee
+
+    async def shutdown(*_, **__):  # as with bellows: closing the radio reports the connection lost
+        app.connection_lost(ConnectionResetError("closed"))
+
+    app.shutdown = shutdown
+    await controller.stop()
+    await asyncio.sleep(0.05)
+    assert not output.errors

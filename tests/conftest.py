@@ -36,6 +36,7 @@ DEVICE_ID = "3ad0d5e0-e32d-5b43-ac8f-150aa969c63d"
 PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"  # toggle command_1/6/2
 PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"  # on_time attribute_1/6/16385 (Read|Write)
 MOCK_INPUT_CLUSTERS: list[int] = [6, 8]  # OnOff, LevelControl; tests may monkeypatch it
+MOCK_OUTPUT_CLUSTERS: list[int] = []  # client-side clusters; tests may monkeypatch it
 
 
 def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.device.Device:
@@ -61,6 +62,8 @@ def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.
     ep.device_type = zigpy.profiles.zha.DeviceType.ON_OFF_LIGHT
     for cluster_id in MOCK_INPUT_CLUSTERS:
         ep.add_input_cluster(cluster_id)
+    for cluster_id in MOCK_OUTPUT_CLUSTERS:
+        ep.add_output_cluster(cluster_id)
     return dev
 
 

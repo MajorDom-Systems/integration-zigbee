@@ -67,6 +67,10 @@ _INTER_CHUNK_DELAY = 0.05
 
 _quirks_loaded = False
 
+# A cluster the device lists but doesn't implement answers a read with a Default Response carrying
+# UNSUPPORTED_CLUSTER, which zigpy fans out to every requested attribute.
+_UNSUPPORTED_STATUSES = frozenset({ZCLStatus.UNSUPPORTED_ATTRIBUTE, ZCLStatus.UNSUPPORTED_CLUSTER})
+
 
 _SETTING_ENTITY_TYPES = frozenset({"config", "diagnostic"})
 _SENSOR_PLATFORMS = frozenset({"sensor", "binary_sensor"})
@@ -172,14 +176,12 @@ def _check_zcl_failures(
     """
     cluster_path = _zb_path(device, zbdevice, endpoint, cluster)
     unsupported = [
-        attr_id
-        for attr_id, status in failures.items()
-        if attr_id is not None and status == ZCLStatus.UNSUPPORTED_ATTRIBUTE
+        attr_id for attr_id, status in failures.items() if attr_id is not None and status in _UNSUPPORTED_STATUSES
     ]
     errors = {
         attr_id: status
         for attr_id, status in failures.items()
-        if status != ZCLStatus.SUCCESS and status != ZCLStatus.UNSUPPORTED_ATTRIBUTE
+        if status != ZCLStatus.SUCCESS and status not in _UNSUPPORTED_STATUSES
     }
 
     for attr_id in unsupported:
@@ -378,7 +380,24 @@ class ZigBeeController(AbstractController):
             # v2 QuirkBuilder entity judgment for this device (empty for non-quirked devices).
             quirk_ux = quirk_ux_map(zbdevice)
             for endpoint in zbdevice.non_zdo_endpoints:
-                for cluster in endpoint.clusters:
+                # Only server (input) clusters: output clusters are client-side, so their attributes
+                # live on the remote and fetch/send_command never reach them.
+                for cluster in endpoint.in_clusters.values():
+                    # Probe before mapping: a simple descriptor often lists clusters the firmware
+                    # doesn't implement (e.g. Tuya relays with Metering/ElectricalMeasurement). The
+                    # read marks unsupported attributes, so only what the device has gets exposed.
+                    await self._read_cluster_attributes(
+                        device,
+                        zbdevice,
+                        endpoint,
+                        cluster,
+                        self._readable_attribute_ids(cluster),
+                        log_prefix="[PAIR]",
+                        timeout=2,
+                    )
+                    if self._is_unimplemented(cluster):
+                        log.debug("[PAIR] skipping unimplemented %s", _zb_path(endpoint=endpoint, cluster=cluster))
+                        continue
                     for attribute_id, attribute in cluster.attributes.items():
                         if cluster.is_attribute_unsupported(attribute_id):
                             continue
@@ -607,12 +626,17 @@ class ZigBeeController(AbstractController):
         t0 = asyncio.get_event_loop().time()
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
-                readable_ids = [
-                    attr_id for attr_id in cluster.attributes if not cluster.is_attribute_unsupported(attr_id)
-                ]
                 attr_values = await self._read_cluster_attributes(
-                    device, zbdevice, endpoint, cluster, readable_ids, log_prefix="[FETCH]", timeout=2
+                    device,
+                    zbdevice,
+                    endpoint,
+                    cluster,
+                    self._readable_attribute_ids(cluster),
+                    log_prefix="[FETCH]",
+                    timeout=2,
                 )
+                if self._is_unimplemented(cluster):
+                    continue  # pairing exposed no parameters for it
 
                 for attribute_id in cluster.attributes:
                     if cluster.is_attribute_unsupported(attribute_id):
@@ -850,6 +874,15 @@ class ZigBeeController(AbstractController):
                 raise_errors=False,
             )
         return attr_values
+
+    @staticmethod
+    def _readable_attribute_ids(cluster: zigpy.zcl.Cluster) -> list[int]:
+        return [attr_id for attr_id in cluster.attributes if not cluster.is_attribute_unsupported(attr_id)]
+
+    @classmethod
+    def _is_unimplemented(cls, cluster: zigpy.zcl.Cluster) -> bool:
+        """Listed in the simple descriptor, but the device reported every attribute unsupported."""
+        return bool(cluster.attributes) and not cls._readable_attribute_ids(cluster)
 
     def _create_task(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)

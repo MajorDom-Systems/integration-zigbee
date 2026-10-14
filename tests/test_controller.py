@@ -1,7 +1,7 @@
 """Unit tests driving ZigBeeController directly against the in-memory zigpy stub."""
 
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import conftest
@@ -11,11 +11,14 @@ from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
 from zigpy.zcl.clusters.closures import DoorLock, WindowCovering
-from zigpy.zcl.clusters.general import LevelControl
+from zigpy.zcl.clusters.general import LevelControl, OnOff
+from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
 from zigpy.zcl.clusters.hvac import Fan
 from zigpy.zcl.clusters.lighting import Color
+from zigpy.zcl.clusters.smartenergy import Metering
+from zigpy.zcl.foundation import Status as ZCLStatus
 
-from majordom_zigbee.model import ZBParameter
+from majordom_zigbee.model import ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
 
 
@@ -287,3 +290,50 @@ async def test_attribute_enum_valid_values_map_value_to_label(zigbee, monkeypatc
         fan_mode,
     )
     write_mock.assert_awaited_once_with({fan_mode_id: Fan.FanMode.On.value})
+
+
+# Tuya TS0001 dry-contact relay: the simple descriptor lists Metering and ElectricalMeasurement,
+# but the firmware implements neither. Metering answers UNSUPPORTED_ATTRIBUTE per attribute, while
+# ElectricalMeasurement is rejected as a whole cluster (a Default Response with UNSUPPORTED_CLUSTER).
+_TS0001_INPUT_CLUSTERS = [0x0000, 0x0003, 0x0004, 0x0005, OnOff.cluster_id, Metering.cluster_id]
+_TS0001_INPUT_CLUSTERS += [ElectricalMeasurement.cluster_id, 0xE000, 0xE001]
+_TS0001_OUTPUT_CLUSTERS = [0x000A, 0x0019]  # Time, Ota (client side)
+_TS0001_UNSUPPORTED_STATUS = {
+    Metering.cluster_id: ZCLStatus.UNSUPPORTED_ATTRIBUTE,
+    ElectricalMeasurement.cluster_id: ZCLStatus.UNSUPPORTED_CLUSTER,
+}
+
+
+async def _ts0001_read_attributes(cluster: zigpy.zcl.Cluster, attributes: list[int], **_kwargs):
+    if (status := _TS0001_UNSUPPORTED_STATUS.get(cluster.cluster_id)) is not None:
+        return {}, dict.fromkeys(attributes, status)
+    return {}, {}
+
+
+async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
+    monkeypatch.setattr(conftest, "MOCK_INPUT_CLUSTERS", _TS0001_INPUT_CLUSTERS)
+    monkeypatch.setattr(conftest, "MOCK_OUTPUT_CLUSTERS", _TS0001_OUTPUT_CLUSTERS)
+    controller, output, repository, _app = zigbee
+    with patch.object(zigpy.zcl.Cluster, "read_attributes", new=_ts0001_read_attributes):
+        discovery = await _pair(zigbee)
+        await _wait_for(lambda: bool(output.events))  # the background fetch after pairing
+    device = await _device(repository, discovery.id)
+    async with repository.session() as repo:
+        parameters = (await repo.state(discovery.id, as_=ZBDeviceState)).parameters
+    clusters = {p.integration_data.cluster_id for p in parameters}
+
+    # unimplemented clusters expose nothing, client-side (output) clusters have no attributes to read,
+    # and the attribute-less Tuya clusters 0xE000/0xE001 (no quirk applied here) add nothing either
+    assert clusters == {0x0000, 0x0003, 0x0004, 0x0005, OnOff.cluster_id}
+    # fetch reports values only for the parameters pairing exposed
+    assert {e.parameter_id for e in output.events} <= {p.id for p in parameters}
+
+    # the relay itself stays exposed and controllable
+    mapper = controller._mapper
+    on_off_id = str(mapper.attribute_parameter_uuid(discovery.id, 1, OnOff.cluster_id, OnOff.AttributeDefs.on_off.id))
+    toggle_id = str(mapper.command_parameter_uuid(discovery.id, 1, OnOff.cluster_id, OnOff.ServerCommandDefs.toggle.id))
+    assert {on_off_id, toggle_id} <= {str(p.id) for p in parameters}
+    toggle = await _param(repository, discovery.id, toggle_id)
+    await controller.send_command(
+        DeviceCommand(device_id=discovery.id, parameter_id=UUID(toggle_id), value=None), device, toggle
+    )

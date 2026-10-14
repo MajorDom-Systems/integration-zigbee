@@ -107,6 +107,7 @@ attached coordinator, so swapping dongles needs **no source change**.
 - [x] Availability tracking while running (`controller_did_lose_device` / `last_error`)
 - [x] Graceful shutdown in `stop`
 - [x] Tests pass against a simulated `zigpy` device (`tests/`)
+- [x] Owned — maintained by Parker Industries
 
 ### Parameter metadata sources & priority
 

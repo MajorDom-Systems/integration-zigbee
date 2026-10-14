@@ -295,7 +295,7 @@ class ZigBeeController(AbstractController):
         self._application.add_listener(self)
         log.debug("[READY] connected to %s", self._zigbee_device_path)
 
-        # Optionally cap the coordinator's TX power (e.g. RF-quiet cage/hardware testing). Unset =
+        # Optionally cap the coordinator's TX power (e.g. RF-quiet hardware testing). Unset =
         # radio default (full power, for a real home). The radio clamps to its floor.
         tx_dbm = os.environ.get("MAJORDOM_ZIGBEE_TX_DBM")
         if tx_dbm:

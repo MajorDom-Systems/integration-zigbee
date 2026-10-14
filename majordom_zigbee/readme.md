@@ -6,9 +6,9 @@ default (`znp`/Texas Instruments is selectable via `_ZIGBEE_STACK`). zigpy owns 
 network, the ZCL, and device interviews; this integration adapts it to the Hub's
 `AbstractController` contract.
 
-The radio comes from `dependencies.links["zigbee"]` (path and zigpy dialect), the network and
-transmit power from `dependencies.settings` (`ZigBeeSettings`); zigpy's device database lives
-under the integration's `documents_folder` as `zigbee.db`.
+The radio's serial port comes from `dependencies.hardware_interfaces[0]` (overridable via
+the `ZIGBEE_DEVICE_PATH` env var); zigpy's device database lives under the integration's
+`documents_folder` as `zigbee.db`.
 
 ## Files
 
@@ -48,6 +48,9 @@ id a parameter gets at pairing is identical to the one used on fetch and in live
 
 - `test_zigbee_controller_mocked.py` — an in-memory zigpy stub, no radio or devices needed
   (runs in CI).
+- `test_zigbee_controller_hardware.py` — a real device in the self-hosted IoT cage; manual
+  only. Its hardcoded device/parameter ids must be regenerated for your DUT (see the note
+  at the top of that file).
 
 ## Notes
 

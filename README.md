@@ -51,7 +51,7 @@ the controller with the SDK's test doubles against a simulated `zigpy` device �
 `majordom-zigbee` is a standalone library — import it into your own app, or run **just this
 integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
 It needs a Zigbee coordinator radio (a SkyConnect, ConBee, or a zigpy-znp/bellows-supported dongle)
-at a serial path: pass it as `links={"zigbee": Endpoint("zigbee", "ezsp", "/dev/ttyUSB0")}`.
+at a serial path.
 
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
 CLI, watch mode, and the programmatic API.
@@ -65,10 +65,9 @@ attached coordinator, so swapping dongles needs **no source change**.
   and TI Z-Stack/ZNP (`zigpy-znp` — CC2652, Sonoff ZBDongle-P).
 - **Optional extras:** `pip install 'majordom-zigbee[deconz]'` (ConBee/RaspBee), `[xbee]` (Digi
   XBee), `[zigate]` (ZiGate), or `[all-radios]`.
-- **Selecting the backend:** the controller declares `needs = [Need("zigbee")]`; the hub binds a
-  `zigbee` link whose dialect (`ezsp` / `znp` / `deconz` / `xbee` / `zigate` / `cc`) picks the
-  library, or `auto` to probe. `ZigBeeController.probe(path)` recognises unknown sticks for the
-  hub. See `majordom_zigbee/radio.py`.
+- **Selecting the backend:** by default the attached dongle is **auto-probed**. Pin one explicitly
+  with the `MAJORDOM_ZIGBEE_RADIO` env var (`ezsp` / `znp` / `deconz` / `xbee` / `zigate`) or the
+  `ZigBeeController.radio` attribute. See `majordom_zigbee/radio.py`.
 
 ## About this integration
 
@@ -77,18 +76,12 @@ attached coordinator, so swapping dongles needs **no source change**.
 - **Supported devices:** Zigbee Home Automation devices — lights, plugs, switches, sensors.
 - **Credentials needed to pair:** none — devices join during an explicit pairing window.
 
-### Needs
+### Required harness
 
-| Capability | Required | Provided by |
-|------------|----------|-------------|
-| `zigbee` (any dialect: `ezsp`, `znp`, `deconz`, `xbee`, `zigate`, `cc`) | yes | a Silicon Labs stick with Zigbee firmware, a stick `ZigBeeController.probe()` recognises, or the hub's `multiprotocol` service on a multi-PAN stick |
-
-The Hub hands it over as `dependencies.links["zigbee"]`: a serial path, or `socket://…` when the
-`multiprotocol` service fronts the radio.
-
-- **Services it brings:** none — `zigpy` speaks to the radio directly.
-- **Settings:** channel, PAN ID, extended PAN ID, network key and transmit power (`ZigBeeSettings`);
-  empty values are picked or generated when the network is formed.
+- **Hardware adapters:** a Zigbee coordinator radio (SkyConnect / ConBee / a `zigpy`-supported
+  dongle) — the Hub assigns its OS device path via `dependencies.hardware_interfaces`
+  (e.g. `/dev/ttyACM0`).
+- **Third-party software services:** none — `zigpy` speaks to the radio directly.
 - **OS / permissions:** serial-port access to the radio.
 
 ### Protocol stack (OSI)

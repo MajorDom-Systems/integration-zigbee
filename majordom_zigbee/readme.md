@@ -48,9 +48,7 @@ id a parameter gets at pairing is identical to the one used on fetch and in live
 
 - `test_zigbee_controller_mocked.py` — an in-memory zigpy stub, no radio or devices needed
   (runs in CI).
-- `test_zigbee_controller_hardware.py` — a real device in the self-hosted IoT cage; manual
-  only. Its hardcoded device/parameter ids must be regenerated for your DUT (see the note
-  at the top of that file).
+- Real-device tests are kept in a private repository and run manually.
 
 ## Notes
 

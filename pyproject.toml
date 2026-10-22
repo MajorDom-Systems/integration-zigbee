@@ -2,7 +2,11 @@
 name = "majordom-zigbee"
 version = "0.1.6"
 description = "Zigbee integration for MajorDom — bridges Zigbee devices into the MajorDom language."
-authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
+authors = [
+    { name = "Parker Industries" },
+    { name = "Ehor Lukianov @Hexa-Hexagon", email = "85293779+Hexa-Hexagon@users.noreply.github.com" },
+    { name = "Mark Parker @MarkParker5", email = "34688010+MarkParker5@users.noreply.github.com" },
+]
 readme = "README.md"
 # AGPL-3.0 is required, not chosen: this package is effectively a wrapper around the GPL-3.0
 # zigpy / zigpy-znp / bellows stack, so the combined work must carry a compatible copyleft
@@ -49,10 +53,11 @@ Documentation = "https://docs.majordom.io/device-integration"
 Repository = "https://github.com/MajorDom-Systems/integration-zigbee"
 Issues = "https://github.com/MajorDom-Systems/integration-zigbee/issues"
 "Commercial licensing" = "https://parker-industries.org/partnership"
+"Parker Industries" = "https://parker-industries.org"
 
 [dependency-groups]
 dev = [
-    "poethepoet (>=0.36.0,<1.0.0)",
+    "poethepoet (>=0.49.0,<1.0.0)",
     "ty", "ruff", "pip-audit",
     "pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "pytest-repeat",
     "pytest-benchmark", "pytest-profiling", "pytest-resource-usage", "coverage",

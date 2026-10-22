@@ -64,3 +64,10 @@ async def test_auto_probe_picks_first_matching(monkeypatch):
     resolved = await radio_mod.resolve_application({"path": "/dev/x"}, requested="auto")
     assert resolved is znp_app
     assert (await ZigBeeController.probe("/dev/x")) == Endpoint("zigbee", "znp", "/dev/x")
+
+
+def test_the_need_takes_every_zigpy_dialect_only():
+    (need,) = ZigBeeController.needs
+    assert all(need.accepts(Endpoint("zigbee", r.key, "/dev/x")) for r in radio_mod.RADIOS)
+    assert not need.accepts(Endpoint("zigbee", "zigbee2mqtt", "mqtt://127.0.0.1"))
+

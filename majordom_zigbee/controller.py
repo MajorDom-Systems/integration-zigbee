@@ -52,7 +52,7 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .radio import detect, resolve_application
+from .radio import ZIGPY_DIALECTS, detect, resolve_application
 from .zigbee_spec import (
     EVERYDAY_COMMANDS,
     MAIN_PARAMETER_BY_CLUSTER,
@@ -240,7 +240,7 @@ class ZigBeeController(AbstractController):
     is on the network the moment it joins the permit-join window. See readme.md.
     """
 
-    needs = [Need("zigbee")]  # any zigpy dialect: ezsp, znp, deconz, xbee, zigate, cc
+    needs = [Need("zigbee", ZIGPY_DIALECTS)]
     settings = ZigBeeSettings
 
     _zigbee_device_path: str

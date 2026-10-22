@@ -72,6 +72,9 @@ RADIOS: tuple[Radio, ...] = (
     ),
 )
 
+#: Every dialect a zigpy radio library speaks: what the controller's ``zigbee`` need accepts.
+ZIGPY_DIALECTS: tuple[str, ...] = tuple(r.key for r in RADIOS)
+
 _BY_KEY: dict[str, Radio] = {r.key: r for r in RADIOS}
 #: Friendly aliases so common product/stack names resolve to a radio key.
 _ALIASES: dict[str, str] = {

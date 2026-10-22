@@ -1,5 +1,6 @@
 """Unit tests for backend-agnostic radio selection (majordom_zigbee.radio)."""
 
+import importlib.util
 import sys
 import types
 from unittest.mock import AsyncMock
@@ -71,3 +72,9 @@ def test_the_need_takes_every_zigpy_dialect_only():
     assert all(need.accepts(Endpoint("zigbee", r.key, "/dev/x")) for r in radio_mod.RADIOS)
     assert not need.accepts(Endpoint("zigbee", "zigbee2mqtt", "mqtt://127.0.0.1"))
 
+
+@pytest.mark.parametrize("radio", radio_mod.RADIOS, ids=lambda r: r.key)
+def test_installed_radio_libraries_load(radio):
+    if importlib.util.find_spec(radio.application.partition(".")[0]) is None:
+        pytest.skip(f"{radio.package} is not installed")
+    assert radio_mod._load(radio) is not None

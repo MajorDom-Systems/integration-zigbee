@@ -65,6 +65,18 @@ RADIOS: tuple[Radio, ...] = (
         "ZiGate",
     ),
     Radio(
+        "ziggurat",
+        "zigpy_ziggurat.zigbee.application.ControllerApplication",
+        "zigpy-ziggurat",
+        "Ziggurat, the open-source host-side Zigbee stack, through its server",
+    ),
+    Radio(
+        "blz",
+        "zigpy_blz.zigbee.application.ControllerApplication",
+        "zigpy-blz",
+        "Bouffalo Lab BL70x via BLZ",
+    ),
+    Radio(
         "cc",
         "zigpy_cc.zigbee.application.ControllerApplication",
         "zigpy-cc",
@@ -88,6 +100,8 @@ _ALIASES: dict[str, str] = {
     "z-stack": "znp",
     "conbee": "deconz",
     "raspbee": "deconz",
+    "bouffalo": "blz",
+    "bouffalolab": "blz",
 }
 
 

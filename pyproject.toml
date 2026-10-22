@@ -41,10 +41,14 @@ dependencies = [
 deconz = ["zigpy-deconz (>=0.25.5,<1.0.0)"]  # dresden elektronik ConBee/RaspBee
 xbee = ["zigpy-xbee (>=0.21.1,<1.0.0)"]  # Digi XBee
 zigate = ["zigpy-zigate (>=0.14.0,<1.0.0)"]  # ZiGate
+ziggurat = ["zigpy-ziggurat (>=1.0.1,<2.0.0)"]  # Ziggurat server
+blz = ["zigpy-blz (>=0.1.0,<1.0.0)"]  # Bouffalo Lab BL70x
 all-radios = [
     "zigpy-deconz (>=0.25.5,<1.0.0)",
     "zigpy-xbee (>=0.21.1,<1.0.0)",
     "zigpy-zigate (>=0.14.0,<1.0.0)",
+    "zigpy-ziggurat (>=1.0.1,<2.0.0)",
+    "zigpy-blz (>=0.1.0,<1.0.0)",
 ]
 
 [project.urls]

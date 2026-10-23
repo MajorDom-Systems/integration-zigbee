@@ -1,6 +1,6 @@
 """Unit tests for the Zigbee controller.
 
-Drive `ZigBeeController` directly — via the SDK's test dependencies, against an in-memory
+Drive `ZigBeeController` directly — via the SDK's test platform, against an in-memory
 zigpy stub (no radio, no DB). The Hub keeps the e2e (mocked-radio) coverage and the
 real-hardware tests.
 """
@@ -17,14 +17,9 @@ import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
 from majordom_integration_sdk import Endpoint
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk.controller import Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
-from majordom_integration_sdk.testing import (
-    FakeBLEDiscoveryService,
-    FakeSSDPDiscoveryService,
-    FakeZeroconfDiscoveryService,
-    RecordingControllerOutput,
-)
+from majordom_integration_sdk.testing import RecordingControllerOutput
 
 from majordom_zigbee import ZigBeeController
 
@@ -143,15 +138,8 @@ async def zigbee():
     import tempfile
     from pathlib import Path
 
-    deps = AbstractController.Dependencies(
-        output=output,
-        make_device_repository=repository.session,
-        documents_folder=Path(tempfile.mkdtemp()),
-        zeroconf_discovery_service=FakeZeroconfDiscoveryService(),
-        ssdp_discovery_service=FakeSSDPDiscoveryService(),
-        ble_discovery_service=FakeBLEDiscoveryService(),
-        links={"zigbee": Endpoint("zigbee", "ezsp", "/dev/null")},  # pinned backend: no probing of /dev/null
-    )
+    deps = Platform(output=output, make_device_repository=repository.session, documents_folder=Path(tempfile.mkdtemp()))
+    peripherals = {"zigbee": Endpoint("zigbee", "ezsp", "/dev/null")}  # pinned backend: no probing of /dev/null
 
     with (
         patch("bellows.zigbee.application.ControllerApplication.new", side_effect=_new),
@@ -159,7 +147,7 @@ async def zigbee():
         patch("zigpy.zcl.Cluster.write_attributes", new_callable=AsyncMock, return_value=[{}, {}]),
         patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
     ):
-        controller = ZigBeeController(deps)
+        controller = ZigBeeController(deps, peripherals)
         await controller.start()
         created[0]._zb_controller = controller
         yield controller, output, repository, created[0]

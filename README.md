@@ -79,7 +79,7 @@ attached coordinator, so swapping dongles needs **no source change**.
 ### Required harness
 
 - **Hardware adapters:** a Zigbee coordinator radio (SkyConnect / ConBee / a `zigpy`-supported
-  dongle) — the Hub assigns its OS device path via `dependencies.hardware_interfaces`
+  dongle) — the Hub assigns its OS device path via `self.peripherals`
   (e.g. `/dev/ttyACM0`).
 - **Third-party software services:** none — `zigpy` speaks to the radio directly.
 - **OS / permissions:** serial-port access to the radio.

@@ -9,6 +9,7 @@ import conftest
 import pytest
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
+from majordom_integration_sdk import IntegrationError
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
 from zigpy.zcl.clusters.closures import DoorLock, WindowCovering
@@ -345,7 +346,9 @@ async def test_reports_a_lost_radio_so_the_hub_restarts_it(zigbee):
     controller.connection_lost(ConnectionResetError("service restarted"))
 
     await _wait_for(lambda: bool(output.errors))
-    assert output.errors[-1] == ("Lost the connection to the Zigbee radio.", False)
+    assert output.errors == {
+        "radio-lost": IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", False)
+    }
 
 
 async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):

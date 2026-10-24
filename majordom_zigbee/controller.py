@@ -9,7 +9,7 @@ from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk import Endpoint, Need
+from majordom_integration_sdk import Endpoint, IntegrationError, Need
 from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas.command import DeviceCommand
@@ -781,8 +781,8 @@ class ZigBeeController(AbstractController):
         """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
         reconnect by itself: tell the hub, which restarts the integration."""
         log.warning("[RADIO] connection lost: %r", exc)
-        message = "Lost the connection to the Zigbee radio."
-        self._create_task(self.platform.output.controller_did_encounter_error(self, message, still_running=False))
+        error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", still_running=False)
+        self._create_task(self.platform.output.controller_did_encounter_error(self, error))
 
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""

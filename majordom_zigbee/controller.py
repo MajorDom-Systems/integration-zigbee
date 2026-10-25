@@ -781,7 +781,7 @@ class ZigBeeController(AbstractController):
         """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
         reconnect by itself: tell the hub, which restarts the integration."""
         log.warning("[RADIO] connection lost: %r", exc)
-        error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", still_running=False)
+        error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
         self._create_task(self.platform.output.controller_did_encounter_error(self, error))
 
     def device_joined(self, device: ZPDevice):

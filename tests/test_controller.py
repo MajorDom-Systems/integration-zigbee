@@ -9,9 +9,9 @@ import conftest
 import pytest
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
-from majordom_integration_sdk import IntegrationError
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
+from majordom_integration_sdk.testing import RecordingPeripheralOutput, build_test_platform
 from zigpy.zcl.clusters.closures import DoorLock, WindowCovering
 from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
@@ -20,6 +20,8 @@ from zigpy.zcl.clusters.lighting import Color
 from zigpy.zcl.clusters.smartenergy import Metering
 from zigpy.zcl.foundation import Status as ZCLStatus
 
+import majordom_zigbee
+from majordom_zigbee import ZigBeeController
 from majordom_zigbee.model import ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
 
@@ -341,18 +343,18 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     )
 
 
-async def test_reports_a_lost_radio_so_the_hub_restarts_it(zigbee):
-    controller, output, _repo, _app = zigbee
+async def test_reports_a_lost_radio_so_the_runtime_restarts_it(zigbee):
+    controller, _output, _repo, _app = zigbee
+    controller.runtime = runtime = RecordingPeripheralOutput()
     controller.connection_lost(ConnectionResetError("service restarted"))
 
-    await _wait_for(lambda: bool(output.errors))
-    assert output.errors == {
-        "radio-lost": IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", False)
-    }
+    await _wait_for(lambda: bool(runtime.failed))
+    assert runtime.failed == [(controller, "Lost the connection to the Zigbee radio.")]
 
 
 async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
-    controller, output, _repo, app = zigbee
+    controller, _output, _repo, app = zigbee
+    controller.runtime = runtime = RecordingPeripheralOutput()
 
     async def shutdown(*_, **__):  # as with bellows: closing the radio reports the connection lost
         app.connection_lost(ConnectionResetError("closed"))
@@ -360,4 +362,9 @@ async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
     app.shutdown = shutdown
     await controller.stop()
     await asyncio.sleep(0.05)
-    assert not output.errors
+    assert not runtime.failed
+
+
+def test_the_package_exports_its_controller():
+    (controller,) = majordom_zigbee.peripherals(build_test_platform())
+    assert isinstance(controller, ZigBeeController)

@@ -8,6 +8,7 @@ real-hardware tests.
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
 import pytest_asyncio
 import zigpy.application
 import zigpy.device
@@ -16,7 +17,7 @@ import zigpy.profiles
 import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
-from majordom_integration_sdk import Endpoint
+from majordom_integration_sdk import Endpoint, Peripherals
 from majordom_integration_sdk.controller import Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
 from majordom_integration_sdk.testing import RecordingControllerOutput
@@ -33,6 +34,7 @@ PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"  # toggle command_1/6/
 PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"  # on_time attribute_1/6/16385 (Read|Write)
 MOCK_INPUT_CLUSTERS: list[int] = [6, 8]  # OnOff, LevelControl; tests may monkeypatch it
 MOCK_OUTPUT_CLUSTERS: list[int] = []  # client-side clusters; tests may monkeypatch it
+RADIO = Endpoint("zigbee", "ezsp", "/dev/null")  # pinned backend: no probing of /dev/null
 
 
 def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.device.Device:
@@ -67,6 +69,7 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
     """In-memory zigpy stub — no hardware, no DB."""
 
     _zb_controller = None  # set to the controller after start()
+    given_config: dict | None = None  # what the controller started it with
 
     async def send_packet(self, *_):
         pass
@@ -118,10 +121,9 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
             del self.devices[ieee]
 
 
-@pytest_asyncio.fixture
-async def zigbee():
-    """Started ZigBeeController wired to an in-memory zigpy stub, plus the recording output
-    and repository so tests can assert on both sides."""
+@pytest.fixture
+def zigpy_apps():
+    """The in-memory zigpy stubs the controller starts, in order."""
     created: list[_MockZigpyApp] = []
 
     async def _new(config, auto_form=False):
@@ -129,17 +131,9 @@ async def zigbee():
         app.state.node_info = app_state.NodeInfo(
             nwk=t.NWK(0x0000), ieee=NCP_IEEE, logical_type=zdo_t.LogicalType.Coordinator
         )
+        app.given_config = config
         created.append(app)
         return app
-
-    repository = DeviceRepositoryMemory(integration="ZigBee")
-    output = RecordingControllerOutput()
-
-    import tempfile
-    from pathlib import Path
-
-    deps = Platform(output=output, make_device_repository=repository.session, documents_folder=Path(tempfile.mkdtemp()))
-    peripherals = {"zigbee": Endpoint("zigbee", "ezsp", "/dev/null")}  # pinned backend: no probing of /dev/null
 
     with (
         patch("bellows.zigbee.application.ControllerApplication.new", side_effect=_new),
@@ -147,8 +141,29 @@ async def zigbee():
         patch("zigpy.zcl.Cluster.write_attributes", new_callable=AsyncMock, return_value=[{}, {}]),
         patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
     ):
-        controller = ZigBeeController(deps, peripherals)
-        await controller.start()
-        created[0]._zb_controller = controller
-        yield controller, output, repository, created[0]
-        await controller.stop()
+        yield created
+
+
+@pytest_asyncio.fixture
+async def zigbee(zigpy_apps):
+    """Started ZigBeeController wired to an in-memory zigpy stub, plus the recording output
+    and repository so tests can assert on both sides."""
+    store: dict = {}  # what every integration's repository shares, each scoped to its own devices
+    repository = DeviceRepositoryMemory(integration="ZigBee", store=store)
+    output = RecordingControllerOutput()
+
+    import tempfile
+    from pathlib import Path
+
+    deps = Platform(
+        output=output,
+        make_device_repository=lambda integration: DeviceRepositoryMemory(integration, store).session(),
+        documents_folder=Path(tempfile.mkdtemp()),
+    )
+
+    controller = ZigBeeController(deps)
+    controller.peripherals = Peripherals({"zigbee": RADIO})
+    await controller.start()
+    zigpy_apps[0]._zb_controller = controller
+    yield controller, output, repository, zigpy_apps[0]
+    await controller.stop()

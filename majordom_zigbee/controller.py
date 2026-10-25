@@ -2,16 +2,14 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import Mapping
 from enum import Enum
 from typing import Any, cast, override
 from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk import Endpoint, IntegrationError, Need
+from majordom_integration_sdk import Endpoint, Need
 from majordom_integration_sdk.controller import AbstractController, Platform
-from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -222,19 +220,7 @@ def _check_zcl_failures(
         log.error(f"{log_prefix} ZCL failures:\n\t{details}")
 
 
-class ZigBeeSettings(BaseModel):
-    channel: int | None = Field(None, ge=11, le=26, title="Channel", description="Empty picks one when forming.")
-    pan_id: int | None = Field(None, ge=0, le=0xFFFE, title="PAN ID", description="Empty generates one when forming.")
-    extended_pan_id: str | None = Field(
-        None, title="Extended PAN ID", description="Like dd:dd:dd:dd:dd:dd:dd:dd. Empty generates one when forming."
-    )
-    network_key: str | None = Field(None, title="Network key", description="32 hex digits. Empty generates one.")
-    tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
-        None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
-    )
-
-
-class ZigBeeController(AbstractController):
+class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeController.Settings"]):
     """Bridges the Hub to Zigbee devices through a USB coordinator radio via zigpy.
 
     zigpy owns the Zigbee network, the ZCL, and device interviews; this controller adapts it
@@ -242,8 +228,20 @@ class ZigBeeController(AbstractController):
     is on the network the moment it joins the permit-join window. See readme.md.
     """
 
+    class Settings(BaseModel):
+        channel: int | None = Field(None, ge=11, le=26, title="Channel", description="Empty picks one when forming.")
+        pan_id: int | None = Field(
+            None, ge=0, le=0xFFFE, title="PAN ID", description="Empty generates one when forming."
+        )
+        extended_pan_id: str | None = Field(
+            None, title="Extended PAN ID", description="Like dd:dd:dd:dd:dd:dd:dd:dd. Empty generates one when forming."
+        )
+        network_key: str | None = Field(None, title="Network key", description="32 hex digits. Empty generates one.")
+        tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
+            None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
+        )
+
     needs = [Need("zigbee", ZIGPY_DIALECTS)]
-    settings = ZigBeeSettings
 
     _zigbee_device_path: str
     _zigbe_db: str
@@ -255,8 +253,8 @@ class ZigBeeController(AbstractController):
     _mapper: ZigBeeMapper
     _tasks: set[asyncio.Task]
 
-    def __init__(self, platform: Platform, peripherals: Mapping[str, Bound] | None = None):
-        super().__init__(platform, peripherals)
+    def __init__(self, platform: Platform, *, settings: Settings | None = None):
+        super().__init__(platform, settings=settings)
         # Mapper is wired with the framework's UUID generators so every Zigbee id is namespaced
         # consistently under the integration and device (see ZigBeeMapper).
         self._mapper = ZigBeeMapper(self.device_uuid, self.parameter_uuid)
@@ -297,7 +295,7 @@ class ZigBeeController(AbstractController):
 
     async def start(self):
         link = self.peripherals.endpoint("zigbee")
-        settings = cast(ZigBeeSettings, self.platform.settings or ZigBeeSettings())
+        settings = self.settings
         self._zigbee_device_path = link.url
         self._zigbe_db = str(self.documents_folder / "zigbee.db")
         log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
@@ -332,7 +330,7 @@ class ZigBeeController(AbstractController):
         self._application.add_listener(self)
         log.debug("[READY] connected to %s", self._zigbee_device_path)
 
-        async with self.platform.make_device_repository() as device_repo:
+        async with self.device_repository() as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices
             # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
             for zbdevice in self._application.devices.values():
@@ -393,7 +391,7 @@ class ZigBeeController(AbstractController):
     async def pair_device(
         self, discovery: Discovery, credentials: ProvidedCredentials | None
     ):  # Break down into submethods
-        async with self.platform.make_device_repository() as device_repository:
+        async with self.device_repository() as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
@@ -779,10 +777,9 @@ class ZigBeeController(AbstractController):
 
     def connection_lost(self, exc: Exception):
         """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
-        reconnect by itself: tell the hub, which restarts the integration."""
+        reconnect by itself: tell the runtime, which restarts the integration."""
         log.warning("[RADIO] connection lost: %r", exc)
-        error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
-        self._create_task(self.platform.output.controller_did_encounter_error(self, error))
+        self._create_task(self.runtime.peripheral_did_fail(self, "Lost the connection to the Zigbee radio."))
 
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""

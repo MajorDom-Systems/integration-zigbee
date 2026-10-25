@@ -9,6 +9,7 @@ import conftest
 import pytest
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
+from majordom_integration_sdk import Peripherals
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
@@ -369,6 +370,27 @@ async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
     await controller.stop()
     await asyncio.sleep(0.05)
     assert not runtime.failed
+
+
+_NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))
+
+
+async def test_a_start_that_cant_open_the_radio_stops_cleanly():
+    controller = ZigBeeController(build_test_platform())
+    controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
+    with _NO_RADIO, pytest.raises(OSError):
+        await controller.start()
+    await controller.stop()  # as the runtime does after a failed start
+
+
+async def test_a_restart_that_cant_open_the_radio_leaves_the_last_one_closed(zigbee):
+    controller, _output, _repo, app = zigbee
+    await controller.stop()
+    app.shutdown = shutdown = AsyncMock()
+    with _NO_RADIO, pytest.raises(OSError):
+        await controller.start()
+    await controller.stop()
+    shutdown.assert_not_awaited()
 
 
 def test_the_package_exports_its_controller():

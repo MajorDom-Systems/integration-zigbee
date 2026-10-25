@@ -20,6 +20,7 @@ from majordom_integration_sdk.schemas.parameter import (
     ParameterVisibility,
 )
 from pydantic import BaseModel, Field
+from zigpy.application import ControllerApplication
 from zigpy.config import (
     CONF_DATABASE,
     CONF_DEVICE,
@@ -263,6 +264,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._connected_devices: dict[UUID, ZPDevice] = {}
         self._availability: dict[UUID, bool] = {}  # device_id -> last signalled availability
         self._tasks: set[asyncio.Task] = set()
+        self._application: ControllerApplication | None = None  # while started
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -375,6 +377,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         if self._application:
             self._application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
             await self._application.shutdown()
+            self._application = None
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
@@ -937,6 +940,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             # if the device was connected
             return
         log.info("[REMOVE] %s wasn't paired within 5 minutes: removing it from the network", ieee)
+        assert self._application  # stop() cancels this task before it lets go of the application
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)
         self._awaiting_zb_discoveries.pop(discovery_id)

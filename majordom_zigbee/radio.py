@@ -16,6 +16,7 @@ import importlib
 import logging
 from dataclasses import dataclass
 
+from majordom_integration_sdk import Endpoint, UsbDriver
 from zigpy.application import ControllerApplication
 from zigpy.config import CONF_DEVICE_PATH
 
@@ -167,3 +168,15 @@ async def resolve_application(
         f"Could not auto-detect the zigbee radio on {device_config.get(CONF_DEVICE_PATH, '?')}. "
         f"Install its library, e.g. pip install 'majordom-zigbee[deconz]'."
     )
+
+
+class ZigpyDriver(UsbDriver):
+    """The sticks only zigpy tells apart (ConBee, ZiGate, XBee, ...), for the runtime's USB scanner: the first
+    installed radio library that answers on a stick names its firmware, which serves that dialect of ``zigbee``."""
+
+    name = "zigpy"
+    firmwares = {radio.key: [Endpoint("zigbee", radio.key, "{device}")] for radio in RADIOS}
+
+    async def identify(self, path: str) -> str | None:
+        found = await detect({CONF_DEVICE_PATH: path})
+        return found[0].key if found else None

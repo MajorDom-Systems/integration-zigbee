@@ -8,7 +8,7 @@ from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk import Endpoint, Need
+from majordom_integration_sdk import Need
 from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
@@ -53,7 +53,7 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .radio import ZIGPY_DIALECTS, detect, resolve_application
+from .radio import ZIGPY_DIALECTS, resolve_application
 from .zigbee_spec import (
     EVERYDAY_COMMANDS,
     MAIN_PARAMETER_BY_CLUSTER,
@@ -289,11 +289,6 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # -------------------------------------------------------------------------
     # Lifecycle
     # -------------------------------------------------------------------------
-
-    @classmethod
-    async def probe(cls, path: str) -> Endpoint | None:
-        found = await detect({CONF_DEVICE_PATH: path})
-        return Endpoint("zigbee", found[0].key, path) if found else None
 
     async def start(self):
         link = self.peripherals.endpoint("zigbee")

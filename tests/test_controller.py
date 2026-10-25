@@ -23,7 +23,7 @@ from zigpy.zcl.clusters.smartenergy import Metering
 from zigpy.zcl.foundation import Status as ZCLStatus
 
 import majordom_zigbee
-from majordom_zigbee import ZigBeeController
+from majordom_zigbee import ZigBeeController, ZigpyDriver
 from majordom_zigbee.model import ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
 
@@ -393,6 +393,6 @@ async def test_a_restart_that_cant_open_the_radio_leaves_the_last_one_closed(zig
     shutdown.assert_not_awaited()
 
 
-def test_the_package_exports_its_controller():
-    (controller,) = majordom_zigbee.peripherals(build_test_platform())
-    assert isinstance(controller, ZigBeeController)
+def test_the_package_exports_its_controller_and_usb_driver():
+    driver, controller = majordom_zigbee.peripherals(build_test_platform())
+    assert isinstance(driver, ZigpyDriver) and isinstance(controller, ZigBeeController)

@@ -9,6 +9,7 @@ import conftest
 import pytest
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
+from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
 from majordom_integration_sdk.testing import RecordingPeripheralOutput, build_test_platform
@@ -343,13 +344,18 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     )
 
 
-async def test_reports_a_lost_radio_so_the_runtime_restarts_it(zigbee):
-    controller, _output, _repo, _app = zigbee
-    controller.runtime = runtime = RecordingPeripheralOutput()
-    controller.connection_lost(ConnectionResetError("service restarted"))
+async def test_a_lost_radio_has_the_runtime_restart_it(zigpy_apps, tmp_path):
+    controller = ZigBeeController(build_test_platform())
+    runtime = Runtime(tmp_path, [Pinned(conftest.RADIO), controller])
+    await runtime.start()
+    try:
+        await _wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+        controller.connection_lost(ConnectionResetError("service restarted"))
 
-    await _wait_for(lambda: bool(runtime.failed))
-    assert runtime.failed == [(controller, "Lost the connection to the Zigbee radio.")]
+        await _wait_for(lambda: runtime.status(controller).kind == StatusKind.RETRYING)
+        assert runtime.status(controller).detail.startswith("Lost the connection to the Zigbee radio.")
+    finally:
+        await runtime.stop()
 
 
 async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):

@@ -366,10 +366,11 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def stop(self):
         log.debug("[STOP] shutting down")
-        for task in self._tasks:
+        tasks = self._tasks - {asyncio.current_task()}  # the runtime stops it from the task reporting the lost radio
+        for task in tasks:
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         if self._application:
             self._application.remove_listener(self)  # its shutdown closes the radio: no connection is lost

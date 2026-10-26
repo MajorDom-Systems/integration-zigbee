@@ -10,7 +10,7 @@ from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk import AbstractController, Endpoint, IntegrationError, Need, Platform
+from majordom_integration_sdk import STABLE_RUN, AbstractController, Endpoint, IntegrationError, Need, Platform
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import (
     CredentialsType,
@@ -273,7 +273,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # Seconds before each try to reopen a lost radio; once the last one fails, Zigbee can't go on
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)
     # Seconds a reopened radio must hold for its next loss to have every try again (the runtime's stable-run time)
-    STABLE_RUN: ClassVar[float] = 300
+    STABLE_RUN: ClassVar[float] = STABLE_RUN
 
     _zigbee_device_path: str
     _zigbe_db: str

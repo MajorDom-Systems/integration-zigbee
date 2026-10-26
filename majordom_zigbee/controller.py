@@ -31,10 +31,6 @@ from zigpy.config import (
     CONF_DEVICE,
     CONF_DEVICE_PATH,
     CONF_NWK,
-    CONF_NWK_CHANNEL,
-    CONF_NWK_EXTENDED_PAN_ID,
-    CONF_NWK_KEY,
-    CONF_NWK_PAN_ID,
     CONF_NWK_TX_POWER,
 )
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
@@ -235,14 +231,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     """
 
     class Settings(BaseModel):
-        channel: int | None = Field(None, ge=11, le=26, title="Channel", description="Empty picks one when forming.")
-        pan_id: int | None = Field(
-            None, ge=0, le=0xFFFE, title="PAN ID", description="Empty generates one when forming."
-        )
-        extended_pan_id: str | None = Field(
-            None, title="Extended PAN ID", description="Like dd:dd:dd:dd:dd:dd:dd:dd. Empty generates one when forming."
-        )
-        network_key: str | None = Field(None, title="Network key", description="32 hex digits. Empty generates one.")
+        # The network the radio runs, filled in once it starts: moving it is a network takeover, not a setting
+        channel: int | None = Field(None, title="Channel", json_schema_extra={"readOnly": True})
+        pan_id: int | None = Field(None, title="PAN ID", json_schema_extra={"readOnly": True})
+        extended_pan_id: str | None = Field(None, title="Extended PAN ID", json_schema_extra={"readOnly": True})
         tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
             None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
         )
@@ -314,21 +306,14 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     async def _open(self):
         """Starts zigpy on the bound radio and takes over the devices on its network."""
         link = self.peripherals.endpoint("zigbee")
-        settings = self.settings
+        tx_power = self.settings.tx_power
         self._zigbee_device_path = link.url
         self._zigbe_db = str(self.platform.documents_folder(self) / "zigbee.db")
         log.debug(f"[START] port={self._zigbee_device_path}  db={self._zigbe_db}")
-        network = {
-            CONF_NWK_CHANNEL: settings.channel,
-            CONF_NWK_PAN_ID: settings.pan_id,
-            CONF_NWK_EXTENDED_PAN_ID: settings.extended_pan_id,
-            CONF_NWK_KEY: list(bytes.fromhex(settings.network_key)) if settings.network_key else None,
-            CONF_NWK_TX_POWER: settings.tx_power,
-        }
         config: dict[str, Any] = {
             CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
             CONF_DATABASE: self._zigbe_db,
-            CONF_NWK: {key: value for key, value in network.items() if value is not None},
+            CONF_NWK: {} if tx_power is None else {CONF_NWK_TX_POWER: tx_power},
         }
 
         # Register per-device quirks before the radio starts interviewing devices.
@@ -350,6 +335,9 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             raise
         self._application.add_listener(self)
         log.debug(f"[READY] connected to {self._zigbee_device_path}")
+        network = self._application.state.network_info
+        self.settings.channel, self.settings.pan_id = int(network.channel), int(network.pan_id)
+        self.settings.extended_pan_id = str(network.extended_pan_id)
 
         async with self.platform.device_repository(self) as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices

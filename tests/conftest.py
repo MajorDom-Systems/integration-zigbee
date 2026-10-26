@@ -28,6 +28,7 @@ from majordom_zigbee import ZigBeeController
 MOCK_IEEE = t.EUI64.convert("00:11:22:33:44:55:66:77")
 MOCK_NWK = t.NWK(0x1234)
 NCP_IEEE = t.EUI64.convert("aa:11:22:bb:33:44:be:ef")
+EXTENDED_PAN_ID = "dd:dd:dd:dd:dd:dd:dd:dd"  # of the network the radio runs, on channel 15 with PAN ID 0x1234
 
 DEVICE_ID = "3ad0d5e0-e32d-5b43-ac8f-150aa969c63d"
 PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"  # toggle command_1/6/2
@@ -139,6 +140,9 @@ def zigpy_apps():
         app = _MockZigpyApp({"database_path": None, "device": {"path": "/dev/null"}})
         app.state.node_info = app_state.NodeInfo(
             nwk=t.NWK(0x0000), ieee=NCP_IEEE, logical_type=zdo_t.LogicalType.Coordinator
+        )
+        app.state.network_info = app_state.NetworkInfo(
+            channel=15, pan_id=t.PanId(0x1234), extended_pan_id=t.ExtendedPanId.convert(EXTENDED_PAN_ID)
         )
         app.given_config = config
         created.append(app)

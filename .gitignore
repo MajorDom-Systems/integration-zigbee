@@ -51,3 +51,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# MajorDom dev runner (settings and keys)
+.majordom-dev/

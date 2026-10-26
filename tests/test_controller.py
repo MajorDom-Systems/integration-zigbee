@@ -199,6 +199,16 @@ async def test_a_report_reaches_the_hub_once_however_often_the_device_rejoined(z
     assert len(output.events) == 1
 
 
+async def test_a_discovery_is_paired_as_zigpy_last_built_it(zigbee):
+    controller, output, repository, app = zigbee
+    discovery = await _discover(controller, output)
+    rebuilt = conftest._make_mock_zb_device(app)  # interviewed again, and built anew (as with a quirk)
+    controller.device_initialized(rebuilt)
+    await _seed_provisional(repository, discovery)
+    await controller.pair_device(discovery, None)
+    assert controller._connected_devices[discovery.id] is rebuilt
+
+
 async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery(zigbee):
     controller, output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
     app.remove = remove = AsyncMock()

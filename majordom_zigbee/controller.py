@@ -858,6 +858,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
         # Awaiting pairing and re-initialized -> just (re)subscribe.
         if device_id in self.discoveries:
+            self._awaiting_zb_discoveries[device_id] = device
             self._create_task(self._subscribe(device_id, device))
             return
 

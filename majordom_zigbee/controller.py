@@ -1020,7 +1020,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             # if the device was connected
             return
         log.info(f"[REMOVE] {ieee} wasn't paired within 5 minutes: removing it from the network")
-        assert self._application  # stop() cancels this task before it lets go of the application
+        assert self._application  # _close() cancels this task in the same step it lets go of the application
         await self._application.remove(ieee)
         self._awaiting_zb_discoveries.pop(discovery_id, None)
         if self._majordom_discoveries.pop(discovery_id, None) is not None:

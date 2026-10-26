@@ -124,7 +124,7 @@ def quirk_ux_map(zbdevice: ZPDevice) -> dict[tuple[int, int, str], UxSpec]:
     return out
 
 
-def _ensure_quirks_loaded():
+async def _ensure_quirks_loaded():
     """Register zhaquirks into zigpy's process-global registry, once. Must run before the
     radio interviews devices so a joined device is presented in its quirked form —
     manufacturer clusters decoded into named/typed attributes and v2 entity metadata
@@ -132,9 +132,13 @@ def _ensure_quirks_loaded():
     global _quirks_loaded
     if _quirks_loaded:
         return
-    import zhaquirks
 
-    zhaquirks.setup()
+    def setup():
+        import zhaquirks
+
+        zhaquirks.setup()
+
+    await asyncio.to_thread(setup)  # seconds of imports, off the event loop the Hub shares (as Home Assistant does)
     _quirks_loaded = True
     log.debug("[QUIRKS] zhaquirks registered into zigpy registry")
 
@@ -348,7 +352,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         }
 
         # Register per-device quirks before the radio starts interviewing devices.
-        _ensure_quirks_loaded()
+        await _ensure_quirks_loaded()
 
         # Start the zigpy application of the radio library the bound dialect names.
         application_cls = application_class(link.dialect)

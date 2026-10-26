@@ -1,6 +1,7 @@
 """Unit tests driving ZigBeeController directly against the in-memory zigpy stub."""
 
 import asyncio
+import threading
 import time
 from dataclasses import replace
 from typing import Any, cast
@@ -10,6 +11,7 @@ from uuid import UUID
 import conftest
 import pytest
 import pytest_asyncio
+import zhaquirks
 import zigpy.application
 import zigpy.state as app_state
 import zigpy.types as t
@@ -732,6 +734,20 @@ async def test_a_stop_while_the_reconnect_closes_the_lost_radio_still_closes_its
     await closing.wait()  # the reconnect closes the lost radio
     await controller.stop()  # the USB scanner noticed the unplug a poll later
     await wait_for(lambda: lost._dblistener is not None and not lost._dblistener.running)
+
+
+async def test_the_quirks_load_off_the_event_loop(zigpy_apps, monkeypatch):
+    monkeypatch.setattr(majordom_zigbee.controller, "_quirks_loaded", False)
+    on_the_loop: list[bool] = []
+    # Seconds of imports (3 s on a Mac): on the loop they would stall the Hub's API and every other integration
+    monkeypatch.setattr(
+        zhaquirks, "setup", lambda: on_the_loop.append(threading.current_thread() is threading.main_thread())
+    )
+    controller = ZigBeeController(build_test_platform())
+    controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
+    await controller.start()
+    await controller.stop()
+    assert on_the_loop == [False]
 
 
 def test_the_package_exports_its_controller_and_usb_driver():

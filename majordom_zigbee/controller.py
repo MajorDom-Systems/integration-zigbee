@@ -374,13 +374,14 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
-        if self._application:
-            self._application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
-            await self._application.shutdown()
-            self._application = None
+        # Let go first: the runtime abandons a stop stuck on a vanished radio, cancelling it inside shutdown()
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
+        if application := self._application:
+            self._application = None
+            application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
+            await application.shutdown()
 
     # -------------------------------------------------------------------------
     # Hub -> device operations

@@ -372,6 +372,22 @@ async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
     assert not output.errors
 
 
+async def test_a_stop_cut_short_while_closing_the_radio_lets_go_of_it(zigbee):
+    controller, output, _repo, app = zigbee
+    await _discover(controller, output)
+
+    async def shutdown(**_):  # a vanished radio's I/O never returns
+        await asyncio.Event().wait()
+
+    app.shutdown = shutdown
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.1):  # as the runtime abandons a stop after its STOP_TIMEOUT
+            await controller.stop()
+    del app.shutdown  # the fixture's own stop() returns
+    assert controller._application is None
+    assert not controller.discoveries
+
+
 _NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))
 
 

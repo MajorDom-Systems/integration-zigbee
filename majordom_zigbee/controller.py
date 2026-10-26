@@ -296,7 +296,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._subscriptions: dict[UUID, list[tuple[zigpy.zcl.Cluster, ZBAttributeUpdatedListener]]] = {}
         self._tasks: set[asyncio.Task] = set()
         self._application: ControllerApplication | None = None  # while started
-        self._radio_lock = asyncio.Lock()  # held while the radio opens, and through a reconnect: its close, waits and reopens
+        self._radio_lock = asyncio.Lock()  # held while the radio opens, and through a reconnect: close, waits, reopens
         self._reconnecting: asyncio.Task | None = None
         self._reopens = 0  # tries since the radio last held: drops in a row add up
         self._opened_at = 0.0  # monotonic, when the radio last opened

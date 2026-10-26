@@ -10,6 +10,8 @@ import conftest
 import pytest
 import pytest_asyncio
 import zigpy.application
+import zigpy.state as app_state
+import zigpy.types as t
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID, wait_for
 from majordom_integration_sdk import Peripherals
@@ -592,6 +594,34 @@ async def test_a_start_cut_short_leaves_nothing_open_once_stopped(radios, monkey
     (radio,) = radios
     assert not radio.is_connected
     assert radio._dblistener is not None and not radio._dblistener.running
+
+
+async def test_a_stop_while_the_reconnect_closes_the_lost_radio_still_closes_its_database(radios, monkeypatch):
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0,))
+    closing = asyncio.Event()
+
+    async def startup(app, *, auto_form: bool = False):
+        app.state.network_info = app_state.NetworkInfo(
+            channel=t.uint8_t(15),
+            pan_id=t.PanId(0x1234),
+            extended_pan_id=t.ExtendedPanId.convert(conftest.EXTENDED_PAN_ID),
+        )
+
+    async def disconnect(*_):  # closing a port that just vanished takes a while
+        closing.set()
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(_Radio, "startup", startup)
+    monkeypatch.setattr(_Radio, "disconnect", disconnect)
+    controller = ZigBeeController(build_test_platform())
+    controller.output = RecordingControllerOutput()
+    controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
+    await controller.start()
+    (lost,) = radios
+    lost.connection_lost(ConnectionResetError("unplugged"))  # zigpy at once
+    await closing.wait()  # the reconnect closes the lost radio
+    await controller.stop()  # the USB scanner noticed the unplug a poll later
+    await wait_for(lambda: lost._dblistener is not None and not lost._dblistener.running)
 
 
 def test_the_package_exports_its_controller_and_usb_driver():

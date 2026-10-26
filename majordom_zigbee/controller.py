@@ -394,14 +394,16 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
         for task in self._tasks:
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
         if application:
-            await application.shutdown()
+            # Shielded: a stop cancelling the reconnect while it closes a lost radio would leave zigpy's database open,
+            # whose thread then keeps the process from exiting
+            await asyncio.shield(application.shutdown())
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
 
     # -------------------------------------------------------------------------
     # Hub -> device operations

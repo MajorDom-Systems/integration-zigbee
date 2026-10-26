@@ -319,8 +319,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
         # Start the zigpy application of the radio library the bound dialect names.
         application_cls = await resolve_application(config[CONF_DEVICE], requested=link.dialect)
+        # Kept before it starts the radio: stop() then closes what a failed or cut short start opened
+        self._application = await application_cls.new(config=config, start_radio=False)
         try:
-            self._application = await application_cls.new(config=config, auto_form=True)
+            await self._application.startup(auto_form=True)
         except Exception as e:
             if "locked" in str(e).lower() or "permission" in str(e).lower():
                 holder = port_holder(self._zigbee_device_path)

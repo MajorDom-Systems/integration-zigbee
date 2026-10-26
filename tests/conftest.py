@@ -100,7 +100,10 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
     async def permit_with_link_key(self, *_):
         pass
 
-    async def shutdown(self, *_):
+    async def startup(self, *, auto_form: bool = False):
+        pass
+
+    async def shutdown(self, *, db: bool = True):
         pass
 
     async def load_network_info(self, *, load_devices=False):
@@ -125,7 +128,7 @@ def zigpy_apps():
     """The in-memory zigpy stubs the controller starts, in order."""
     created: list[_MockZigpyApp] = []
 
-    async def _new(config, auto_form=False):
+    async def _new(config, **_):
         app = _MockZigpyApp({"database_path": None, "device": {"path": "/dev/null"}})
         app.state.node_info = app_state.NodeInfo(
             nwk=t.NWK(0x0000), ieee=NCP_IEEE, logical_type=zdo_t.LogicalType.Coordinator

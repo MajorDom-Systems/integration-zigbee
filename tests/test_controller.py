@@ -7,6 +7,7 @@ from uuid import UUID
 
 import conftest
 import pytest
+import zigpy.application
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
 from majordom_integration_sdk import Peripherals
@@ -390,6 +391,68 @@ async def test_a_restart_that_cant_open_the_radio_leaves_the_last_one_closed(zig
         await controller.start()
     await controller.stop()
     shutdown.assert_not_awaited()
+
+
+class _Radio(conftest._MockZigpyApp):
+    """A radio started by zigpy's own new() and startup(), with its database: it refuses to connect, or hangs while
+    zigpy starts the network."""
+
+    startup = zigpy.application.ControllerApplication.startup
+    shutdown = zigpy.application.ControllerApplication.shutdown
+    hangs = False
+    is_connected = False
+
+    async def connect(self, *_):
+        if not self.hangs:
+            raise OSError("radio refused")
+        self.is_connected = True
+
+    async def disconnect(self, *_):
+        self.is_connected = False
+
+    async def load_network_info(self, *, load_devices=False):
+        await asyncio.Event().wait()
+
+
+@pytest.fixture
+async def radios():
+    """The radios the controller opens, in order; any left open is closed after the test."""
+    opened: list[_Radio] = []
+
+    class Radio(_Radio):
+        def __init__(self, config: dict[str, Any]):
+            super().__init__(config)
+            opened.append(self)
+
+    with patch("majordom_zigbee.controller.resolve_application", AsyncMock(return_value=Radio)):
+        yield opened
+    for radio in opened:
+        if radio._dblistener is not None and radio._dblistener.running:
+            await radio._dblistener.shutdown()  # its thread would keep the test process alive
+
+
+async def test_a_start_the_radio_refuses_leaves_nothing_open_once_stopped(radios):
+    controller = ZigBeeController(build_test_platform())
+    controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
+    with pytest.raises(OSError):
+        await controller.start()
+    await controller.stop()
+    (radio,) = radios
+    assert radio._dblistener is not None and not radio._dblistener.running
+
+
+async def test_a_start_cut_short_leaves_nothing_open_once_stopped(radios, monkeypatch):
+    monkeypatch.setattr(_Radio, "hangs", True)
+    controller = ZigBeeController(build_test_platform())
+    controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
+    start = asyncio.create_task(controller.start())
+    await _wait_for(lambda: bool(radios) and radios[0].is_connected)
+    start.cancel()  # the start timeout, or the user restarting or disabling Zigbee meanwhile
+    await asyncio.gather(start, return_exceptions=True)
+    await controller.stop()
+    (radio,) = radios
+    assert not radio.is_connected
+    assert radio._dblistener is not None and not radio._dblistener.running
 
 
 def test_the_package_exports_its_controller_and_usb_driver():

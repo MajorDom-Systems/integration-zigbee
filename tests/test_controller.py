@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 import zhaquirks
 import zigpy.application
+import zigpy.device
 import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zcl
@@ -552,13 +553,44 @@ async def test_an_unplugged_radio_only_parks_zigbee(running, monkeypatch):
     await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
 
 
-async def test_a_radio_lost_while_zigbee_starts_is_reopened_once_it_started(zigbee):
-    controller, output, _repo, app = zigbee
-    async with controller._radio:  # as while start() opens it
-        controller.connection_lost(ConnectionResetError("lost"))
+async def test_a_radio_lost_while_zigbee_starts_is_reopened_once_it_started(zigpy_apps, monkeypatch):
+    async def startup(app, *, auto_form: bool = False):
+        conftest._make_mock_zb_device(app)  # a device the Hub doesn't know: the start interviews it
+
+    async def initialize(zbdevice):  # the radio goes while the start goes through the network's devices
+        if len(zigpy_apps) == 1:
+            zbdevice.application.connection_lost(ConnectionResetError("lost"))
         await asyncio.sleep(0.05)
-        assert controller._application is app
-    await wait_for(lambda: controller._application is not None and controller._application is not app)
+
+    monkeypatch.setattr(conftest._MockZigpyApp, "startup", startup)
+    monkeypatch.setattr(zigpy.device.Device, "initialize", initialize)
+    controller = ZigBeeController(build_test_platform())
+    controller.output = output = RecordingControllerOutput()
+    controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
+    await controller.start()
+    try:
+        assert controller._application is zigpy_apps[0]  # the start went on with it
+        await wait_for(lambda: len(zigpy_apps) == 2 and controller._application is zigpy_apps[1])
+        assert not output.error_log
+    finally:
+        await controller.stop()
+
+
+async def test_a_radio_lost_again_while_it_reopens_is_reopened_afresh(zigbee, zigpy_apps, monkeypatch):
+    controller, output, _repo, _app = zigbee
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0, 0))
+
+    async def startup(app, *, auto_form: bool = False):
+        if len(zigpy_apps) == 2:  # the first reopen never gets through
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(conftest._MockZigpyApp, "startup", startup)
+    controller.connection_lost(ConnectionResetError("lost"))
+    await wait_for(lambda: len(zigpy_apps) == 2)
+    reopening = controller._reconnecting
+    controller.connection_lost(ConnectionResetError("lost again"))
+    await wait_for(lambda: len(zigpy_apps) == 3 and controller._application is zigpy_apps[2])
+    assert reopening is not None and reopening.cancelled()
     assert not output.error_log
 
 

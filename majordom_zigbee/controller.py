@@ -8,7 +8,7 @@ from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk import AbstractController, IntegrationError, Need, Platform
+from majordom_integration_sdk import AbstractController, Endpoint, IntegrationError, Need, Platform
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import (
     CredentialsType,
@@ -29,6 +29,8 @@ from zigpy.application import ControllerApplication
 from zigpy.config import (
     CONF_DATABASE,
     CONF_DEVICE,
+    CONF_DEVICE_BAUDRATE,
+    CONF_DEVICE_FLOW_CONTROL,
     CONF_DEVICE_PATH,
     CONF_NWK,
     CONF_NWK_TX_POWER,
@@ -166,6 +168,16 @@ def _zb_path(
             f"{glue.join(f'{a}({n})' if n else str(a) for a, n in zip(attr_ids, names, strict=False))}"
         )
     return " ".join(parts)
+
+
+def _device_config(link: Endpoint) -> dict[str, Any]:
+    """zigpy's config of the bound radio: its path, and the serial settings its endpoint carries."""
+    config: dict[str, Any] = {CONF_DEVICE_PATH: link.url}
+    if (baud := link.params.get("baud")) is not None:
+        config[CONF_DEVICE_BAUDRATE] = baud
+    if (flow_control := link.params.get("flow_control")) is not None:
+        config[CONF_DEVICE_FLOW_CONTROL] = "hardware" if flow_control else None  # RTS/CTS, as the radios' params mean
+    return config
 
 
 def _check_zcl_failures(
@@ -311,7 +323,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._zigbe_db = str(self.platform.documents_folder(self) / "zigbee.db")
         log.debug(f"[START] port={self._zigbee_device_path}  db={self._zigbe_db}")
         config: dict[str, Any] = {
-            CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
+            CONF_DEVICE: _device_config(link),
             CONF_DATABASE: self._zigbe_db,
             CONF_NWK: {} if tx_power is None else {CONF_NWK_TX_POWER: tx_power},
         }

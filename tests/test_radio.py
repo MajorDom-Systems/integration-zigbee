@@ -3,10 +3,12 @@
 import importlib.util
 import sys
 import types
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from majordom_integration_sdk import Endpoint
+from zigpy.config import CONF_DEVICE_BAUDRATE, CONF_DEVICE_PATH
 
 from majordom_zigbee import radio as radio_mod
 from majordom_zigbee.controller import ZigBeeController
@@ -54,8 +56,42 @@ async def test_the_driver_names_the_first_radio_that_answers(monkeypatch):
         if r.key not in ("deconz", "znp"):
             monkeypatch.setitem(sys.modules, r.application.rpartition(".")[0], None)
     driver = radio_mod.ZigpyDriver()
-    assert await driver.identify("/dev/x") == "znp"
+    assert await driver.identify("/dev/x") == ("znp", {"baud": 115200})
     assert driver.serves("znp", "/dev/x") == [Endpoint("zigbee", "znp", "/dev/x")]
+
+
+def _only(monkeypatch, key: str) -> Any:
+    """The fake library of the radio ``key``, the only one installed."""
+    for r in radio_mod.RADIOS:
+        if r.key != key:
+            monkeypatch.setitem(sys.modules, r.application.rpartition(".")[0], None)
+    return _fake_radio_module(monkeypatch, radio_mod._BY_KEY[key].application, probe_result=False)
+
+
+@pytest.mark.asyncio
+async def test_the_driver_tells_the_baud_the_stick_answered_at(monkeypatch):
+    app = _only(monkeypatch, "ezsp")
+    app.probe = AsyncMock(return_value={CONF_DEVICE_PATH: "/dev/x", CONF_DEVICE_BAUDRATE: 460800})  # bellows' second
+    driver = radio_mod.ZigpyDriver()
+    found = await driver.identify("/dev/x")
+    assert found
+    firmware, params = found
+    assert driver.serves(firmware, "/dev/x", params) == [Endpoint("zigbee", "ezsp", "/dev/x", params={"baud": 460800})]
+
+
+@pytest.mark.asyncio
+async def test_the_driver_tries_the_bauds_a_library_lists_the_zigpy_1_way(monkeypatch):
+    app = _only(monkeypatch, "deconz")  # zigpy-deconz 0.25 and zigpy-blz 0.1, which zigpy 2 doesn't read
+    app._probe_config_variants = [{CONF_DEVICE_BAUDRATE: 38400}, {CONF_DEVICE_BAUDRATE: 115200}]
+    tried: list[int] = []
+
+    async def probe(config):  # a ConBee I: 38400 only
+        tried.append(config.get(CONF_DEVICE_BAUDRATE))
+        return config if config.get(CONF_DEVICE_BAUDRATE) == 38400 else False
+
+    app.probe = probe
+    assert await radio_mod.ZigpyDriver().identify("/dev/x") == ("deconz", {"baud": 38400})
+    assert tried == [38400]
 
 
 @pytest.mark.asyncio

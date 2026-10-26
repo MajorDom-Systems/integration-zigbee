@@ -15,10 +15,11 @@ from __future__ import annotations
 import importlib
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from majordom_integration_sdk import Endpoint, UsbDriver
 from zigpy.application import ControllerApplication
-from zigpy.config import CONF_DEVICE_PATH
+from zigpy.config import CONF_DEVICE_BAUDRATE, CONF_DEVICE_PATH, SCHEMA_DEVICE
 
 log = logging.getLogger(__name__)
 
@@ -99,18 +100,21 @@ def _load(radio: Radio) -> type[ControllerApplication] | None:
     return getattr(module, cls_name)
 
 
-async def detect(device_config: dict) -> tuple[Radio, type[ControllerApplication]] | None:
-    """The first installed radio library that answers on ``device_config``."""
+async def detect(device_config: dict[str, Any]) -> tuple[Radio, dict[str, Any]] | None:
+    """The first installed radio library that answers on ``device_config``, and the device config it answered at."""
     for radio in PROBED:
         if (app := _load(radio)) is None:
             continue
-        try:
-            # A non-matching radio typically raises (wrong protocol on the port) rather than
-            # returning False — either way we move on to the next candidate.
-            if await app.probe(device_config):
-                return radio, app
-        except Exception as exc:  # noqa: BLE001 — any probe failure just means "not this radio"
-            log.debug(f"zigbee radio {radio.key!r} did not match: {exc}")
+        # zigpy 2 probes only _probe_configs: zigpy-deconz 0.25 and zigpy-blz 0.1 still list their bauds the zigpy 1 way
+        for overrides in getattr(app, "_probe_config_variants", None) or [{}]:
+            config = {**device_config, **overrides}
+            try:
+                # A non-matching radio typically raises (wrong protocol on the port) rather than
+                # returning False — either way we move on to the next candidate.
+                if found := await app.probe(config):
+                    return radio, SCHEMA_DEVICE(found if isinstance(found, dict) else config)
+            except Exception as exc:  # noqa: BLE001 — any probe failure just means "not this radio"
+                log.debug(f"zigbee radio {radio.key!r} did not match: {exc}")
     return None
 
 
@@ -131,6 +135,8 @@ class ZigpyDriver(UsbDriver):
     name = "zigpy"
     firmwares = {radio.key: [Endpoint("zigbee", radio.key, "{device}")] for radio in PROBED}
 
-    async def identify(self, path: str) -> str | None:
-        found = await detect({CONF_DEVICE_PATH: path})
-        return found[0].key if found else None
+    async def identify(self, path: str) -> tuple[str, dict[str, Any]] | None:
+        if not (found := await detect({CONF_DEVICE_PATH: path})):
+            return None
+        radio, config = found
+        return radio.key, {"baud": config[CONF_DEVICE_BAUDRATE]}

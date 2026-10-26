@@ -1,6 +1,7 @@
 """Unit tests driving ZigBeeController directly against the in-memory zigpy stub."""
 
 import asyncio
+from dataclasses import replace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
@@ -16,6 +17,7 @@ from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, S
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
+from zigpy.config import CONF_DEVICE, CONF_DEVICE_BAUDRATE, CONF_DEVICE_FLOW_CONTROL, CONF_DEVICE_PATH
 from zigpy.zcl.clusters.closures import DoorLock, WindowCovering
 from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
@@ -459,6 +461,25 @@ async def test_a_restart_that_cant_open_the_radio_leaves_the_last_one_closed(zig
         await controller.start()
     await controller.stop()
     shutdown.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("params", "device"),
+    [
+        ({}, {}),
+        ({"baud": 460800, "flow_control": True}, {CONF_DEVICE_BAUDRATE: 460800, CONF_DEVICE_FLOW_CONTROL: "hardware"}),
+        ({"baud": 38400, "flow_control": False}, {CONF_DEVICE_BAUDRATE: 38400, CONF_DEVICE_FLOW_CONTROL: None}),
+    ],
+)
+async def test_the_radio_opens_with_its_endpoints_serial_settings(zigpy_apps, params, device):
+    controller = ZigBeeController(build_test_platform())
+    controller.peripherals = Peripherals({"zigbee": replace(conftest.RADIO, params=params)})
+    await controller.start()
+    try:
+        (app,) = zigpy_apps
+        assert app.given_config and app.given_config[CONF_DEVICE] == {CONF_DEVICE_PATH: conftest.RADIO.url, **device}
+    finally:
+        await controller.stop()
 
 
 class _Radio(conftest._MockZigpyApp):

@@ -154,6 +154,21 @@ async def test_unpairs_a_device(zigbee):
     assert MOCK_IEEE not in app.devices
 
 
+async def test_a_start_reports_the_paired_devices_on_the_network_connected(zigbee, monkeypatch):
+    controller, output, _repo, _app = zigbee
+    discovery = await _pair(zigbee)
+    await wait_for(lambda: discovery.id in output.connected_devices)
+    await controller.stop()  # the Hub marks its devices unavailable
+    output.connected_devices.clear()
+
+    async def startup(app, *, auto_form: bool = False):  # zigpy loads the network's devices from its database
+        conftest._make_mock_zb_device(app)
+
+    monkeypatch.setattr(conftest._MockZigpyApp, "startup", startup)
+    await controller.start()
+    assert output.connected_devices == [discovery.id]
+
+
 async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery(zigbee):
     controller, _output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
     app.remove = remove = AsyncMock()

@@ -351,6 +351,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self.settings.channel, self.settings.pan_id = int(network.channel), int(network.pan_id)
         self.settings.extended_pan_id = str(network.extended_pan_id)
 
+        self._availability.clear()  # report every device's availability afresh
         async with self.platform.device_repository(self) as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices
             # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
@@ -360,7 +361,6 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(zbdevice.ieee))
                 if await device_repo.get(device_id, ZBDevice):
                     self._connected_devices[device_id] = zbdevice
-                    self._availability[device_id] = True  # baseline for mid-session transitions
                     await self._subscribe(device_id, zbdevice)
                     log.debug(f"[KNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X}")
                 else:
@@ -383,6 +383,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 device.last_error = f"Device {device.name} is no longer connected to the ZigBee network"
                 self._availability[device.id] = False  # baseline for mid-session transitions
                 await device_repo.save(device, device.id)
+        for device_id in list(self._connected_devices):  # the Hub marked them unavailable when Zigbee stopped
+            await self._set_availability(device_id, True)
 
     async def _close(self):
         """Lets go of the radio and of what was found on it."""

@@ -2,10 +2,10 @@
 
 zigpy talks to the coordinator dongle through a per-silicon *radio library* (bellows for Silicon
 Labs EZSP, zigpy-znp for TI Z-Stack, zigpy-deconz for deCONZ, ...). This module maps every
-supported radio to its zigpy ``ControllerApplication`` and resolves the right one for the attached
-dongle — either from the dialect the hub bound (``ezsp``, ``znp``, …) or by probing each installed
-library. Swapping dongles therefore needs only
-the matching library installed, never a source change.
+supported radio to its zigpy ``ControllerApplication``: the controller takes the one the dialect the
+hub bound (``ezsp``, ``znp``, …) names, and ``ZigpyDriver`` probes the installed libraries to tell
+which one a stick speaks. Swapping dongles therefore needs only the matching library installed, never a
+source change.
 
 Add support for a new radio by appending one ``Radio`` entry below — no other code changes.
 """
@@ -89,26 +89,6 @@ RADIOS: tuple[Radio, ...] = (
 ZIGPY_DIALECTS: tuple[str, ...] = tuple(r.key for r in RADIOS)
 
 _BY_KEY: dict[str, Radio] = {r.key: r for r in RADIOS}
-#: Friendly aliases so common product/stack names resolve to a radio key.
-_ALIASES: dict[str, str] = {
-    "bellows": "ezsp",
-    "silabs": "ezsp",
-    "ember": "ezsp",
-    "emberznet": "ezsp",
-    "skyconnect": "ezsp",
-    "ti": "znp",
-    "zstack": "znp",
-    "z-stack": "znp",
-    "conbee": "deconz",
-    "raspbee": "deconz",
-    "bouffalo": "blz",
-    "bouffalolab": "blz",
-}
-
-
-def _normalize(name: str) -> str:
-    name = name.strip().lower()
-    return _ALIASES.get(name, name)
 
 
 def _load(radio: Radio) -> type[ControllerApplication] | None:
@@ -137,37 +117,14 @@ async def detect(device_config: dict) -> tuple[Radio, type[ControllerApplication
     return None
 
 
-async def resolve_application(
-    device_config: dict,
-    requested: str | None = None,
-) -> type[ControllerApplication]:
-    """Return the zigpy ``ControllerApplication`` class for the attached coordinator.
-
-    ``requested``: a radio key/alias to force one library, or ``None``/``"auto"`` to probe every
-    installed radio against ``device_config`` and use the first that answers.
-    """
-    if requested and _normalize(requested) != "auto":
-        key = _normalize(requested)
-        radio = _BY_KEY.get(key)
-        if radio is None:
-            raise ValueError(f"Unknown zigbee radio {requested!r}. Known: {', '.join(_BY_KEY)}, or auto.")
-        app = _load(radio)
-        if app is None:
-            raise RuntimeError(
-                f"Zigbee radio {radio.key!r} was selected but {radio.package!r} is not installed. "
-                f"Install it with: pip install 'majordom-zigbee[{radio.key}]'."
-            )
-        log.info(f"zigbee radio pinned to {radio.key!r} ({radio.description})")
-        return app
-
-    if found := await detect(device_config):
-        radio, app = found
-        log.info(f"zigbee radio auto-detected as {radio.key!r} ({radio.description})")
-        return app
-    raise RuntimeError(
-        f"Could not auto-detect the zigbee radio on {device_config.get(CONF_DEVICE_PATH, '?')}. "
-        f"Install its library, e.g. pip install 'majordom-zigbee[deconz]'."
-    )
+def application_class(dialect: str) -> type[ControllerApplication]:
+    """The zigpy ``ControllerApplication`` of the radio library speaking ``dialect``, which the need took."""
+    radio = _BY_KEY[dialect]
+    if (app := _load(radio)) is None:
+        raise RuntimeError(
+            f"Zigbee radio {radio.key!r} needs {radio.package!r}: pip install 'majordom-zigbee[{radio.key}]'."
+        )
+    return app
 
 
 class ZigpyDriver(UsbDriver):

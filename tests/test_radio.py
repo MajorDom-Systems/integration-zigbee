@@ -28,42 +28,31 @@ def _fake_radio_module(monkeypatch, dotted_path: str, probe_result):
     return app_cls
 
 
-@pytest.mark.asyncio
-async def test_pinned_radio_returns_that_backend(monkeypatch):
+def test_the_dialect_names_its_radio_library(monkeypatch):
     ezsp = next(r for r in radio_mod.RADIOS if r.key == "ezsp")
     app = _fake_radio_module(monkeypatch, ezsp.application, probe_result=True)
-    resolved = await radio_mod.resolve_application({"path": "/dev/ttyUSB0"}, requested="ezsp")
-    assert resolved is app
+    assert radio_mod.application_class("ezsp") is app
+
+
+def test_a_radio_library_missing_says_what_to_install(monkeypatch):
+    deconz = next(r for r in radio_mod.RADIOS if r.key == "deconz")
+    monkeypatch.setitem(sys.modules, deconz.application.rpartition(".")[0], None)
+    with pytest.raises(RuntimeError, match=r"majordom-zigbee\[deconz\]"):
+        radio_mod.application_class("deconz")
 
 
 @pytest.mark.asyncio
-async def test_alias_resolves(monkeypatch):
-    ezsp = next(r for r in radio_mod.RADIOS if r.key == "ezsp")
-    app = _fake_radio_module(monkeypatch, ezsp.application, probe_result=True)
-    resolved = await radio_mod.resolve_application({"path": "/dev/x"}, requested="SkyConnect")
-    assert resolved is app
-
-
-@pytest.mark.asyncio
-async def test_unknown_radio_raises(monkeypatch):
-    with pytest.raises(ValueError, match="Unknown zigbee radio"):
-        await radio_mod.resolve_application({"path": "/dev/x"}, requested="nope")
-
-
-@pytest.mark.asyncio
-async def test_auto_probe_picks_first_matching(monkeypatch):
+async def test_the_driver_names_the_first_radio_that_answers(monkeypatch):
     # ezsp probe fails (raises), znp probe matches -> znp is chosen.
     ezsp = next(r for r in radio_mod.RADIOS if r.key == "ezsp")
     znp = next(r for r in radio_mod.RADIOS if r.key == "znp")
     ezsp_app = _fake_radio_module(monkeypatch, ezsp.application, probe_result=False)
     ezsp_app.probe = AsyncMock(side_effect=RuntimeError("wrong protocol"))
-    znp_app = _fake_radio_module(monkeypatch, znp.application, probe_result=True)
+    _fake_radio_module(monkeypatch, znp.application, probe_result=True)
     # make sure no other radio libs are importable so the loop only sees our two fakes
     for r in radio_mod.RADIOS:
         if r.key not in ("ezsp", "znp"):
             monkeypatch.setitem(sys.modules, r.application.rpartition(".")[0], None)
-    resolved = await radio_mod.resolve_application({"path": "/dev/x"}, requested="auto")
-    assert resolved is znp_app
     driver = radio_mod.ZigpyDriver()
     assert await driver.identify("/dev/x") == "znp"
     assert driver.serves("znp", "/dev/x") == [Endpoint("zigbee", "znp", "/dev/x")]

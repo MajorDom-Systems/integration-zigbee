@@ -54,7 +54,7 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .radio import ZIGPY_DIALECTS, resolve_application
+from .radio import ZIGPY_DIALECTS, application_class
 from .zigbee_spec import (
     EVERYDAY_COMMANDS,
     MAIN_PARAMETER_BY_CLUSTER,
@@ -320,7 +320,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         _ensure_quirks_loaded()
 
         # Start the zigpy application of the radio library the bound dialect names.
-        application_cls = await resolve_application(config[CONF_DEVICE], requested=link.dialect)
+        application_cls = application_class(link.dialect)
         # Kept before it starts the radio: stop() then closes what a failed or cut short start opened
         self._application = await application_cls.new(config=config, start_radio=False)
         try:

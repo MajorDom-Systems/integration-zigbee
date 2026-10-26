@@ -492,7 +492,7 @@ async def radios():
             super().__init__(config)
             opened.append(self)
 
-    with patch("majordom_zigbee.controller.resolve_application", AsyncMock(return_value=Radio)):
+    with patch("majordom_zigbee.controller.application_class", return_value=Radio):
         yield opened
     for radio in opened:
         if radio._dblistener is not None and radio._dblistener.running:

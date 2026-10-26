@@ -438,7 +438,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
         log.debug(f"[PERMIT-JOIN] opening for {duration_sec}s")
         await self._application.permit(duration_sec)
 
@@ -670,14 +670,14 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def unpair(self, device: ZBDevice):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
         log.debug(f"[UNPAIR] ieee={device.integration_data.ieee}")
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.device_uuid_from_ieee(device.integration_data.ieee))
 
     async def identify(self, device: ZBDevice):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
@@ -694,7 +694,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def fetch(self, device: ZBDevice):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
@@ -748,7 +748,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
@@ -855,6 +855,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                     await self._close()
                 else:
                     log.info("[RADIO] reconnected")
+                    if self._reconnecting is asyncio.current_task():  # unless a loss meanwhile started another
+                        self._reconnecting = None
                     return
         error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
         await self.output.controller_did_encounter_error(self, error)
@@ -997,6 +999,11 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     def _is_unimplemented(cls, cluster: zigpy.zcl.Cluster) -> bool:
         """Listed in the simple descriptor, but the device reported every attribute unsupported."""
         return bool(cluster.attributes) and not cls._readable_attribute_ids(cluster)
+
+    def _not_started(self) -> ZBConnectionError:
+        if self._reconnecting:
+            return ZBConnectionError("The Zigbee radio is reconnecting")
+        return ZBConnectionError("ZigBee application is not started")
 
     def _create_task[T](self, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
         task = asyncio.create_task(coro)

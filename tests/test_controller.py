@@ -35,6 +35,7 @@ from zigpy.zcl.foundation import Status as ZCLStatus
 
 import majordom_zigbee
 from majordom_zigbee import ZigBeeController, ZigpyDriver
+from majordom_zigbee.exceptions import ZBConnectionError
 from majordom_zigbee.listener import ZBAttributeUpdatedListener
 from majordom_zigbee.model import ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
@@ -485,6 +486,16 @@ async def test_a_lost_radio_is_reopened_in_place(running, zigpy_apps):
     await wait_for(lambda: len(zigpy_apps) == 2 and controller._application is zigpy_apps[1])
     assert runtime.status(controller).state == PeripheralState.RUNNING
     assert not output.error_log
+    await wait_for(lambda: controller._reconnecting is None)
+
+
+async def test_a_call_while_the_radio_reconnects_says_so(zigbee, monkeypatch):
+    controller, _output, _repo, _app = zigbee
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (10,))
+    controller.connection_lost(ConnectionResetError("the service in front of it restarted"))
+    await wait_for(lambda: controller._application is None)
+    with pytest.raises(ZBConnectionError, match="The Zigbee radio is reconnecting"):
+        await controller.start_pairing_window(60)
 
 
 async def test_a_lost_radios_devices_are_unavailable_until_it_is_reopened(zigbee, monkeypatch):

@@ -171,6 +171,21 @@ async def test_a_start_reports_the_paired_devices_on_the_network_connected(zigbe
     assert output.connected_devices == [discovery.id]
 
 
+def _flip_the_switch(app: zigpy.application.ControllerApplication):
+    on_off = app.get_device(conftest.MOCK_IEEE).endpoints[1].in_clusters[OnOff.cluster_id]
+    on_off._update_attribute(OnOff.AttributeDefs.on_off.id, t.Bool.true)
+
+
+async def test_a_freshly_paired_devices_reports_reach_the_hub(zigbee):
+    _controller, output, _repo, app = zigbee
+    discovery = await _pair(zigbee)
+    await wait_for(lambda: discovery.id in output.connected_devices)  # the fetch after pairing went through
+    output.events.clear()
+    _flip_the_switch(app)
+    await wait_for(lambda: bool(output.events))
+    assert [event.device_id for event in output.events] == [discovery.id]
+
+
 async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery(zigbee):
     controller, output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
     app.remove = remove = AsyncMock()

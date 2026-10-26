@@ -637,6 +637,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 ),
             )
             await device_repository.save(device, discovery.id)
+            await self._subscribe(discovery.id, zbdevice)
             # fetch runs in background; controller_did_connect_device fires after fetch completes
             self._create_task(self._fetch_after_pair(device, zbdevice))
 

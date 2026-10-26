@@ -7,7 +7,9 @@ real-hardware tests.
 
 import asyncio
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -76,7 +78,7 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
     """In-memory zigpy stub — no hardware, no DB."""
 
     _zb_controller = None  # set to the controller after start()
-    given_config: dict | None = None  # what the controller started it with
+    given_config: dict[str, Any] | None = None  # what the controller started it with
 
     async def send_packet(self, *_):
         pass
@@ -161,7 +163,7 @@ def zigpy_apps():
 async def zigbee(zigpy_apps):
     """Started ZigBeeController wired to an in-memory zigpy stub, plus the recording output
     and repository so tests can assert on both sides."""
-    store: dict = {}  # what every integration's repository shares, each scoped to its own devices
+    store: dict[UUID, dict[str, Any]] = {}  # what every integration's repository shares, each scoped to its own devices
     repository = DeviceRepositoryMemory(integration="zigbee", store=store)
     controller = ZigBeeController(build_test_platform(store=store))
     controller.output = output = RecordingControllerOutput()

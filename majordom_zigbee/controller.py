@@ -795,7 +795,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # Device -> Hub: Zigbee network events (zigpy listener) & availability
     # -------------------------------------------------------------------------
 
-    def connection_lost(self, exc: Exception):
+    def connection_lost(self, exc: Exception | None):
         """zigpy lost the radio (the stick re-enumerated, or the service in front of it restarted) and doesn't
         reconnect by itself: reopen it in place. An unplugged stick stops Zigbee through its lost need instead."""
         log.warning(f"[RADIO] connection lost: {exc!r}")

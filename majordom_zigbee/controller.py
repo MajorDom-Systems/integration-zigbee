@@ -393,10 +393,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                         f"[UNKNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X} — "
                         "not in DB, starting disconnect timer"
                     )
-                    try:
-                        await zbdevice.initialize()
-                    except Exception:
-                        log.exception(f"[UNKNOWN] initialize failed for ieee={zbdevice.ieee}")
+                    await zbdevice.initialize()  # never raises: zigpy reports a failure as device_init_failure
 
             # Any device in our DB that isn't on the network anymore is marked unavailable on boot.
             for device in await device_repo.get_all(as_=ZBDevice):

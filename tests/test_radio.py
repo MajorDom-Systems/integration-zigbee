@@ -43,19 +43,32 @@ def test_a_radio_library_missing_says_what_to_install(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_the_driver_names_the_first_radio_that_answers(monkeypatch):
-    # ezsp probe fails (raises), znp probe matches -> znp is chosen.
-    ezsp = next(r for r in radio_mod.RADIOS if r.key == "ezsp")
+    # deconz probe fails (raises), znp probe matches -> znp is chosen.
+    deconz = next(r for r in radio_mod.RADIOS if r.key == "deconz")
     znp = next(r for r in radio_mod.RADIOS if r.key == "znp")
-    ezsp_app = _fake_radio_module(monkeypatch, ezsp.application, probe_result=False)
-    ezsp_app.probe = AsyncMock(side_effect=RuntimeError("wrong protocol"))
+    deconz_app = _fake_radio_module(monkeypatch, deconz.application, probe_result=False)
+    deconz_app.probe = AsyncMock(side_effect=RuntimeError("wrong protocol"))
     _fake_radio_module(monkeypatch, znp.application, probe_result=True)
     # make sure no other radio libs are importable so the loop only sees our two fakes
     for r in radio_mod.RADIOS:
-        if r.key not in ("ezsp", "znp"):
+        if r.key not in ("deconz", "znp"):
             monkeypatch.setitem(sys.modules, r.application.rpartition(".")[0], None)
     driver = radio_mod.ZigpyDriver()
     assert await driver.identify("/dev/x") == "znp"
     assert driver.serves("znp", "/dev/x") == [Endpoint("zigbee", "znp", "/dev/x")]
+
+
+@pytest.mark.asyncio
+async def test_the_driver_probes_the_cheapest_radios_first_and_ezsp_last(monkeypatch):
+    probed: list[str] = []
+    for radio in radio_mod.RADIOS:
+        app = _fake_radio_module(monkeypatch, radio.application, probe_result=False)
+        app.probe = AsyncMock(side_effect=lambda _config, key=radio.key: probed.append(key))
+    driver = radio_mod.ZigpyDriver()
+    assert await driver.identify("/dev/x") is None
+    # ziggurat is a server's WebSocket, never a stick; ezsp last: the SDK's Silabs driver tried the stick first
+    assert probed == ["deconz", "zigate", "xbee", "blz", "znp", "ezsp"]
+    assert list(driver.firmwares) == probed
 
 
 def test_the_need_takes_every_zigpy_dialect_only():
@@ -66,8 +79,8 @@ def test_the_need_takes_every_zigpy_dialect_only():
 
 def test_the_need_takes_what_the_usb_driver_serves():
     (need,) = ZigBeeController.needs
-    served = [e for r in radio_mod.RADIOS for e in radio_mod.ZigpyDriver().serves(r.key, "/dev/x")]
-    assert [e.dialect for e in served] == [r.key for r in radio_mod.RADIOS]
+    served = [e for r in radio_mod.PROBED for e in radio_mod.ZigpyDriver().serves(r.key, "/dev/x")]
+    assert [e.dialect for e in served] == [r.key for r in radio_mod.PROBED]
     assert all(need.accepts(e) for e in served)
 
 

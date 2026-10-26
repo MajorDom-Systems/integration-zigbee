@@ -7,7 +7,7 @@ hub bound (``ezsp``, ``znp``, …) names, and ``ZigpyDriver`` probes the install
 which one a stick speaks. Swapping dongles therefore needs only the matching library installed, never a
 source change.
 
-Add support for a new radio by appending one ``Radio`` entry below — no other code changes.
+Add support for a new radio by appending one ``Radio`` entry below, and its key to ``PROBED`` when a stick speaks it.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ class Radio:
     description: str  #: human-readable hardware hint
 
 
-# Probed in this order during auto-detection — most common coordinators first.
 RADIOS: tuple[Radio, ...] = (
     Radio(
         "ezsp",
@@ -77,18 +76,16 @@ RADIOS: tuple[Radio, ...] = (
         "zigpy-blz",
         "Bouffalo Lab BL70x via BLZ",
     ),
-    Radio(
-        "cc",
-        "zigpy_cc.zigbee.application.ControllerApplication",
-        "zigpy-cc",
-        "Texas Instruments Z-Stack legacy (deprecated)",
-    ),
 )
 
 #: Every dialect a zigpy radio library speaks: what the controller's ``zigbee`` need accepts.
 ZIGPY_DIALECTS: tuple[str, ...] = tuple(r.key for r in RADIOS)
 
 _BY_KEY: dict[str, Radio] = {r.key: r for r in RADIOS}
+
+#: What ``ZigpyDriver`` probes a stick for, in order: the quickest to tell first, ezsp last for the EFR32 sticks the
+#: SDK's Silabs driver didn't identify. Not ziggurat: it speaks through a server's WebSocket, never a stick.
+PROBED: tuple[Radio, ...] = tuple(_BY_KEY[key] for key in ("deconz", "zigate", "xbee", "blz", "znp", "ezsp"))
 
 
 def _load(radio: Radio) -> type[ControllerApplication] | None:
@@ -104,7 +101,7 @@ def _load(radio: Radio) -> type[ControllerApplication] | None:
 
 async def detect(device_config: dict) -> tuple[Radio, type[ControllerApplication]] | None:
     """The first installed radio library that answers on ``device_config``."""
-    for radio in RADIOS:
+    for radio in PROBED:
         if (app := _load(radio)) is None:
             continue
         try:
@@ -132,7 +129,7 @@ class ZigpyDriver(UsbDriver):
     installed radio library that answers on a stick names its firmware, which serves that dialect of ``zigbee``."""
 
     name = "zigpy"
-    firmwares = {radio.key: [Endpoint("zigbee", radio.key, "{device}")] for radio in RADIOS}
+    firmwares = {radio.key: [Endpoint("zigbee", radio.key, "{device}")] for radio in PROBED}
 
     async def identify(self, path: str) -> str | None:
         found = await detect({CONF_DEVICE_PATH: path})

@@ -773,10 +773,12 @@ async def test_a_stop_while_the_reconnect_closes_the_lost_radio_still_closes_its
     controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
     await controller.start()
     (lost,) = radios
+    assert lost._dblistener
+    database = lost._dblistener._db  # aiosqlite's thread, no daemon: left open, the process can't exit
     lost.connection_lost(ConnectionResetError("unplugged"))  # zigpy at once
     await closing.wait()  # the reconnect closes the lost radio
     await controller.stop()  # the USB scanner noticed the unplug a poll later
-    await wait_for(lambda: lost._dblistener is not None and not lost._dblistener.running)
+    await wait_for(lambda: not database.is_alive())
 
 
 async def test_the_quirks_load_off_the_event_loop(zigpy_apps, monkeypatch):

@@ -45,7 +45,7 @@ async def test_the_radios_network_fills_in_the_settings(zigpy_apps):
 
 async def test_a_change_to_the_network_is_refused(zigpy_apps, tmp_path):
     controller = ZigBeeController(build_test_platform())
-    runtime = Runtime(tmp_path, [Pinned(RADIO), controller])
+    runtime = Runtime(tmp_path, [Pinned(RADIO), controller], platform=controller.platform)
     await runtime.start()
     try:
         await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)

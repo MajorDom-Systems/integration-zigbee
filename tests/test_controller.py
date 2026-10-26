@@ -399,7 +399,7 @@ async def running(zigpy_apps, tmp_path, monkeypatch):
     monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0, 0, 0))
     controller, pinned = ZigBeeController(build_test_platform()), Pinned(conftest.RADIO)
     output = RecordingControllerOutput()
-    runtime = Runtime(tmp_path, [pinned, controller], controller_output=output)
+    runtime = Runtime(tmp_path, [pinned, controller], platform=controller.platform, controller_output=output)
     await runtime.start()
     await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
     yield controller, runtime, pinned, output

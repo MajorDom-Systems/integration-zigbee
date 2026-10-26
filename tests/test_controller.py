@@ -153,6 +153,14 @@ async def test_unpairs_a_device(zigbee):
     assert MOCK_IEEE not in app.devices
 
 
+async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery(zigbee):
+    controller, _output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
+    app.remove = remove = AsyncMock()
+    with patch("majordom_zigbee.controller.asyncio.sleep", AsyncMock()):
+        await controller._disconnect_unpaired_discovery(UUID(DEVICE_ID), conftest.MOCK_IEEE)
+    remove.assert_awaited_once_with(conftest.MOCK_IEEE)
+
+
 def _move_ids(controller) -> tuple[str, list[str]]:
     """LevelControl.move's parameter id and its field (sub-parameter) ids on the mock device's endpoint 1."""
     device_id = UUID(DEVICE_ID)

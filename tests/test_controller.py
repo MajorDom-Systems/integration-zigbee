@@ -186,6 +186,19 @@ async def test_a_freshly_paired_devices_reports_reach_the_hub(zigbee):
     assert [event.device_id for event in output.events] == [discovery.id]
 
 
+async def test_a_report_reaches_the_hub_once_however_often_the_device_rejoined(zigbee):
+    controller, output, _repo, app = zigbee
+    discovery = await _pair(zigbee)
+    await wait_for(lambda: discovery.id in output.connected_devices)
+    for _ in range(3):  # power cuts, a parent router rebooting: zigpy keeps a plain device's object
+        controller.device_initialized(app.get_device(conftest.MOCK_IEEE))
+    await asyncio.sleep(0.05)
+    output.events.clear()
+    _flip_the_switch(app)
+    await asyncio.sleep(0.05)
+    assert len(output.events) == 1
+
+
 async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery(zigbee):
     controller, output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
     app.remove = remove = AsyncMock()

@@ -274,6 +274,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._awaiting_zb_discoveries: dict[UUID, ZPDevice] = {}
         self._connected_devices: dict[UUID, ZPDevice] = {}
         self._availability: dict[UUID, bool] = {}  # device_id -> last signalled availability
+        self._subscriptions: dict[UUID, list[tuple[zigpy.zcl.Cluster, ZBAttributeUpdatedListener]]] = {}
         self._tasks: set[asyncio.Task] = set()
         self._application: ControllerApplication | None = None  # while started
         self._radio = asyncio.Lock()  # held while the radio opens or reopens
@@ -397,6 +398,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
+        self._subscriptions.clear()
         if application:
             # Shielded: a stop cancelling the reconnect while it closes a lost radio would leave zigpy's database open,
             # whose thread then keeps the process from exiting
@@ -966,10 +968,15 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         return task
 
     async def _subscribe(self, device_id: UUID, device: ZPDevice):
+        """Listens to the device's attribute reports, once: a rejoin keeps a plain device's clusters."""
+        for cluster, listener in self._subscriptions.pop(device_id, []):
+            cluster.remove_listener(listener)
+        subscriptions = self._subscriptions[device_id] = []
         for endpoint in device.non_zdo_endpoints:
             for cluster in endpoint.in_clusters.values():
                 listener = ZBAttributeUpdatedListener(self, device_id, cluster)
                 cluster.add_listener(listener)
+                subscriptions.append((cluster, listener))
 
     async def _disconnect_unpaired_discovery(self, discovery_id: UUID, ieee: EUI64):
         await asyncio.sleep(300)  # 5 minutes

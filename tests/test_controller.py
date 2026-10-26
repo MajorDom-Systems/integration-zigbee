@@ -484,6 +484,26 @@ async def test_a_lost_radio_is_reopened_in_place(running, zigpy_apps):
     assert not output.error_log
 
 
+async def test_a_lost_radios_devices_are_unavailable_until_it_is_reopened(zigbee, monkeypatch):
+    controller, output, _repo, _app = zigbee
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0,))
+    discovery = await _pair(zigbee)
+    await wait_for(lambda: discovery.id in output.connected_devices)
+    output.connected_devices.clear()
+    is_back = asyncio.Event()
+
+    async def startup(app, *, auto_form: bool = False):  # the radio answers again, and its devices with it
+        await is_back.wait()
+        conftest._make_mock_zb_device(app).last_seen = time.time()
+
+    monkeypatch.setattr(conftest._MockZigpyApp, "startup", startup)
+    controller.connection_lost(ConnectionResetError("the service in front of it restarted"))
+    await wait_for(lambda: output.lost_devices == [discovery.id])
+    assert output.connected_devices == []
+    is_back.set()
+    await wait_for(lambda: output.connected_devices == [discovery.id])
+
+
 async def test_a_radio_that_stays_lost_fails_zigbee(running):
     controller, runtime, _pinned, output = running
     with _NO_RADIO as new:

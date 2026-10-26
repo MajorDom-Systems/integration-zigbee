@@ -829,6 +829,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def _reconnect(self):
         async with self._radio:
+            for device_id in list(self._connected_devices):  # unreachable until the radio is back
+                await self._set_availability(device_id, False)
             lost = list(self._majordom_discoveries)
             await self._close()
             for discovery_id in lost:

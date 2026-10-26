@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Coroutine
 from enum import Enum
 from typing import Any, ClassVar, cast, override
 from uuid import UUID
@@ -282,7 +283,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # (the ZPDevice values could be shrunk to just the IEEE address to save memory, if needed.)
 
     _mapper: ZigBeeMapper
-    _tasks: set[asyncio.Task]
+    _tasks: set[asyncio.Task[Any]]
 
     def __init__(self, platform: Platform, *, settings: Settings | None = None):
         super().__init__(platform, settings=settings)
@@ -294,10 +295,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._connected_devices: dict[UUID, ZPDevice] = {}
         self._availability: dict[UUID, bool] = {}  # device_id -> last signalled availability
         self._subscriptions: dict[UUID, list[tuple[zigpy.zcl.Cluster, ZBAttributeUpdatedListener]]] = {}
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
         self._application: ControllerApplication | None = None  # while started
         self._radio_lock = asyncio.Lock()  # held while the radio opens, and through a reconnect: close, waits, reopens
-        self._reconnecting: asyncio.Task | None = None
+        self._reconnecting: asyncio.Task[None] | None = None
         self._reopens = 0  # tries since the radio last held: drops in a row add up
         self._opened_at = 0.0  # monotonic, when the radio last opened
 
@@ -997,7 +998,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         """Listed in the simple descriptor, but the device reported every attribute unsupported."""
         return bool(cluster.attributes) and not cls._readable_attribute_ids(cluster)
 
-    def _create_task(self, coro) -> asyncio.Task:
+    def _create_task[T](self, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)

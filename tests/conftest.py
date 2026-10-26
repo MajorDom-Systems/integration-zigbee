@@ -6,6 +6,7 @@ real-hardware tests.
 """
 
 import asyncio
+from collections.abc import Callable
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -34,6 +35,12 @@ PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"  # on_time attribute
 MOCK_INPUT_CLUSTERS: list[int] = [6, 8]  # OnOff, LevelControl; tests may monkeypatch it
 MOCK_OUTPUT_CLUSTERS: list[int] = []  # client-side clusters; tests may monkeypatch it
 RADIO = Endpoint("zigbee", "ezsp", "/dev/null")  # pinned backend: no probing of /dev/null
+
+
+async def wait_for(predicate: Callable[[], bool], timeout: float = 3.0):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.02)
 
 
 def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.device.Device:

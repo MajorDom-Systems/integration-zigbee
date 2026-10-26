@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 import zigpy.application
 import zigpy.zcl
-from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
+from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID, wait_for
 from majordom_integration_sdk import Peripherals
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.command import DeviceCommand
@@ -32,19 +32,11 @@ from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
 _NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))
 
 
-async def _wait_for(predicate, timeout: float = 3.0):
-    import asyncio
-
-    async with asyncio.timeout(timeout):
-        while not predicate():
-            await asyncio.sleep(0.02)
-
-
 async def test_discovers_joining_device(zigbee):
     controller, output, _repo, _app = zigbee
     await controller.start_pairing_window(5)  # permit-join -> the stub simulates a device joining
 
-    await _wait_for(lambda: bool(output.received_discoveries))
+    await wait_for(lambda: bool(output.received_discoveries))
     discovery = output.received_discoveries[-1]
     assert str(discovery.id) == DEVICE_ID
     assert discovery.integration == "zigbee"
@@ -53,7 +45,7 @@ async def test_discovers_joining_device(zigbee):
 
 async def _discover(controller, output):
     await controller.start_pairing_window(5)
-    await _wait_for(lambda: bool(output.received_discoveries))
+    await wait_for(lambda: bool(output.received_discoveries))
     return output.received_discoveries[-1]
 
 
@@ -326,7 +318,7 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     controller, output, repository, _app = zigbee
     with patch.object(zigpy.zcl.Cluster, "read_attributes", new=_ts0001_read_attributes):
         discovery = await _pair(zigbee)
-        await _wait_for(lambda: bool(output.events))  # the background fetch after pairing
+        await wait_for(lambda: bool(output.events))  # the background fetch after pairing
     device = await _device(repository, discovery.id)
     async with repository.session() as repo:
         parameters = (await repo.state(discovery.id, as_=ZBDeviceState)).parameters
@@ -357,7 +349,7 @@ async def running(zigpy_apps, tmp_path, monkeypatch):
     output = RecordingControllerOutput()
     runtime = Runtime(tmp_path, [pinned, controller], controller_output=output)
     await runtime.start()
-    await _wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+    await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
     yield controller, runtime, pinned, output
     await runtime.stop()
 
@@ -366,7 +358,7 @@ async def test_a_lost_radio_is_reopened_in_place(running, zigpy_apps):
     controller, runtime, _pinned, output = running
     controller.connection_lost(ConnectionResetError("the service in front of it restarted"))
 
-    await _wait_for(lambda: len(zigpy_apps) == 2 and controller._application is zigpy_apps[1])
+    await wait_for(lambda: len(zigpy_apps) == 2 and controller._application is zigpy_apps[1])
     assert runtime.status(controller).state == PeripheralState.RUNNING
     assert not output.error_log
 
@@ -375,7 +367,7 @@ async def test_a_radio_that_stays_lost_fails_zigbee(running):
     controller, runtime, _pinned, output = running
     with _NO_RADIO as new:
         controller.connection_lost(ConnectionResetError("gone"))
-        await _wait_for(lambda: runtime.status(controller).kind == StatusKind.RETRYING)
+        await wait_for(lambda: runtime.status(controller).kind == StatusKind.RETRYING)
     assert runtime.status(controller).detail.startswith("Lost the connection to the Zigbee radio.")
     assert new.await_count == len(ZigBeeController.RECONNECT_DELAYS)
     assert [error.is_still_running for error in output.errors.values()] == [False]
@@ -387,11 +379,11 @@ async def test_an_unplugged_radio_only_parks_zigbee(running, monkeypatch):
     with _NO_RADIO:
         controller.connection_lost(ConnectionResetError("unplugged"))  # zigpy at once, the USB scanner a poll later
         await pinned.unpin("zigbee")
-        await _wait_for(lambda: runtime.status(controller).kind == StatusKind.NEEDS_UNBOUND)
+        await wait_for(lambda: runtime.status(controller).kind == StatusKind.NEEDS_UNBOUND)
         await asyncio.sleep(0.1)
     assert not output.error_log
     await pinned.pin(conftest.RADIO)
-    await _wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+    await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
 
 
 async def test_a_radio_lost_while_zigbee_starts_is_reopened_once_it_started(zigbee):
@@ -400,7 +392,7 @@ async def test_a_radio_lost_while_zigbee_starts_is_reopened_once_it_started(zigb
         controller.connection_lost(ConnectionResetError("lost"))
         await asyncio.sleep(0.05)
         assert controller._application is app
-    await _wait_for(lambda: controller._application is not None and controller._application is not app)
+    await wait_for(lambda: controller._application is not None and controller._application is not app)
     assert not output.error_log
 
 
@@ -522,7 +514,7 @@ async def test_a_start_cut_short_leaves_nothing_open_once_stopped(radios, monkey
     controller = ZigBeeController(build_test_platform())
     controller.peripherals = Peripherals({"zigbee": conftest.RADIO})
     start = asyncio.create_task(controller.start())
-    await _wait_for(lambda: bool(radios) and radios[0].is_connected)
+    await wait_for(lambda: bool(radios) and radios[0].is_connected)
     start.cancel()  # the start timeout, or the user restarting or disabling Zigbee meanwhile
     await asyncio.gather(start, return_exceptions=True)
     await controller.stop()

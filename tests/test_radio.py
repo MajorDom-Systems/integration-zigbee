@@ -6,9 +6,10 @@ import types
 from typing import Any
 from unittest.mock import AsyncMock
 
+import conftest
 import pytest
 from majordom_integration_sdk import Endpoint
-from zigpy.config import CONF_DEVICE_BAUDRATE, CONF_DEVICE_PATH
+from zigpy.config import CONF_DEVICE, CONF_DEVICE_BAUDRATE, CONF_DEVICE_PATH
 
 from majordom_zigbee import radio as radio_mod
 from majordom_zigbee.controller import ZigBeeController
@@ -92,6 +93,35 @@ async def test_the_driver_tries_the_bauds_a_library_lists_the_zigpy_1_way(monkey
     app.probe = probe
     assert await radio_mod.ZigpyDriver().identify("/dev/x") == ("deconz", {"baud": 38400})
     assert tried == [38400]
+
+
+@pytest.mark.parametrize(
+    ("probe_configs", "variants", "answers_at", "tried"),
+    [
+        ([{CONF_DEVICE_BAUDRATE: 460800}], None, 460800, [115200, 460800]),  # bellows: zigpy 2's way
+        ([], [{CONF_DEVICE_BAUDRATE: 38400}, {CONF_DEVICE_BAUDRATE: 115200}], 115200, [38400, 115200]),  # zigpy 1's
+    ],
+)
+@pytest.mark.asyncio
+async def test_zigpys_own_probe_tries_each_baud_a_library_lists(
+    monkeypatch, probe_configs, variants, answers_at, tried
+):
+    opened_at: list[int] = []
+
+    class Library(conftest._MockZigpyApp):  # zigpy's own probe(), which opens the stick at each config it merged
+        _probe_configs = probe_configs
+        _probe_config_variants = variants
+
+        async def connect(self, *_):
+            opened_at.append(self.config[CONF_DEVICE][CONF_DEVICE_BAUDRATE])
+            if opened_at[-1] != answers_at:
+                raise OSError("no answer at this baud")
+
+    _only(monkeypatch, "deconz")
+    module_path, _, cls_name = radio_mod._BY_KEY["deconz"].application.rpartition(".")
+    monkeypatch.setattr(sys.modules[module_path], cls_name, Library)
+    assert await radio_mod.ZigpyDriver().identify("/dev/x") == ("deconz", {"baud": answers_at})
+    assert opened_at == tried
 
 
 @pytest.mark.asyncio

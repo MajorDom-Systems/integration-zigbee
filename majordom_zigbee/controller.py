@@ -267,6 +267,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     needs = [Need("zigbee", ZIGPY_DIALECTS)]
     # Seconds before each try to reopen a lost radio; once the last one fails, Zigbee can't go on
     RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)
+    # Seconds a reopened radio must hold for its next loss to have every try again (the runtime's stable-run time)
+    STABLE_RUN: ClassVar[float] = 300
 
     _zigbee_device_path: str
     _zigbe_db: str
@@ -292,6 +294,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._application: ControllerApplication | None = None  # while started
         self._radio = asyncio.Lock()  # held while the radio opens or reopens
         self._reconnecting: asyncio.Task | None = None
+        self._reopens = 0  # tries since the radio last held: drops in a row add up
+        self._opened_at = 0.0  # monotonic, when the radio last opened
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -318,6 +322,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # -------------------------------------------------------------------------
 
     async def start(self):
+        self._reopens = 0
         async with self._radio:
             await self._open()
 
@@ -360,6 +365,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 raise PermissionError(msg) from e
             raise
         self._application.add_listener(self)
+        self._opened_at = time.monotonic()
         log.debug(f"[READY] connected to {self._zigbee_device_path}")
         network = self._application.state.network_info
         self.settings.channel, self.settings.pan_id = int(network.channel), int(network.pan_id)
@@ -829,13 +835,16 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def _reconnect(self):
         async with self._radio:
+            if time.monotonic() - self._opened_at >= self.STABLE_RUN:
+                self._reopens = 0
             for device_id in list(self._connected_devices):  # unreachable until the radio is back
                 await self._set_availability(device_id, False)
             lost = list(self._majordom_discoveries)
             await self._close()
             for discovery_id in lost:
                 await self.output.controller_did_lose_discovery(self, discovery_id)
-            for delay in self.RECONNECT_DELAYS:
+            for delay in self.RECONNECT_DELAYS[self._reopens :]:
+                self._reopens += 1
                 await asyncio.sleep(delay)
                 try:
                     await self._open()

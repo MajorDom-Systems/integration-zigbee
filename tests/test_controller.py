@@ -504,6 +504,29 @@ async def test_a_lost_radios_devices_are_unavailable_until_it_is_reopened(zigbee
     await wait_for(lambda: output.connected_devices == [discovery.id])
 
 
+async def test_a_radio_that_drops_soon_after_each_reopen_fails_zigbee(zigbee, zigpy_apps, monkeypatch):
+    controller, output, _repo, _app = zigbee
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0, 0))
+    for opened in (2, 3):  # a flaky hub or cable: the radio answers, then drops again a moment later
+        controller.connection_lost(ConnectionResetError("dropped"))
+        await wait_for(lambda opened=opened: len(zigpy_apps) == opened and controller._application is zigpy_apps[-1])
+    assert not output.error_log
+    controller.connection_lost(ConnectionResetError("dropped"))
+    await wait_for(lambda: bool(output.error_log))
+    assert [error.is_still_running for error in output.errors.values()] == [False]
+    assert len(zigpy_apps) == 3
+
+
+async def test_a_radio_that_held_after_its_reopen_has_every_try_again(zigbee, zigpy_apps, monkeypatch):
+    controller, output, _repo, _app = zigbee
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0,))
+    monkeypatch.setattr(ZigBeeController, "STABLE_RUN", 0)  # each reopen held long enough
+    for opened in (2, 3, 4):
+        controller.connection_lost(ConnectionResetError("dropped"))
+        await wait_for(lambda opened=opened: len(zigpy_apps) == opened and controller._application is zigpy_apps[-1])
+    assert not output.error_log
+
+
 async def test_a_radio_that_stays_lost_fails_zigbee(running):
     controller, runtime, _pinned, output = running
     with _NO_RADIO as new:

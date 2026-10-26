@@ -7,6 +7,7 @@ from uuid import UUID
 
 import conftest
 import pytest
+import pytest_asyncio
 import zigpy.application
 import zigpy.zcl
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID
@@ -14,7 +15,7 @@ from majordom_integration_sdk import Peripherals
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
-from majordom_integration_sdk.testing import build_test_platform
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 from zigpy.zcl.clusters.closures import DoorLock, WindowCovering
 from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
@@ -27,6 +28,8 @@ import majordom_zigbee
 from majordom_zigbee import ZigBeeController, ZigpyDriver
 from majordom_zigbee.model import ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
+
+_NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))
 
 
 async def _wait_for(predicate, timeout: float = 3.0):
@@ -346,18 +349,77 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     )
 
 
-async def test_a_lost_radio_has_the_runtime_restart_it(zigpy_apps, tmp_path):
-    controller = ZigBeeController(build_test_platform())
-    runtime = Runtime(tmp_path, [Pinned(conftest.RADIO), controller])
+@pytest_asyncio.fixture
+async def running(zigpy_apps, tmp_path, monkeypatch):
+    """Zigbee run by the runtime on a pinned radio, which it reopens without waiting."""
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0, 0, 0))
+    controller, pinned = ZigBeeController(build_test_platform()), Pinned(conftest.RADIO)
+    output = RecordingControllerOutput()
+    runtime = Runtime(tmp_path, [pinned, controller], controller_output=output)
     await runtime.start()
-    try:
-        await _wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
-        controller.connection_lost(ConnectionResetError("service restarted"))
+    await _wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+    yield controller, runtime, pinned, output
+    await runtime.stop()
 
+
+async def test_a_lost_radio_is_reopened_in_place(running, zigpy_apps):
+    controller, runtime, _pinned, output = running
+    controller.connection_lost(ConnectionResetError("the service in front of it restarted"))
+
+    await _wait_for(lambda: len(zigpy_apps) == 2 and controller._application is zigpy_apps[1])
+    assert runtime.status(controller).state == PeripheralState.RUNNING
+    assert not output.error_log
+
+
+async def test_a_radio_that_stays_lost_fails_zigbee(running):
+    controller, runtime, _pinned, output = running
+    with _NO_RADIO as new:
+        controller.connection_lost(ConnectionResetError("gone"))
         await _wait_for(lambda: runtime.status(controller).kind == StatusKind.RETRYING)
-        assert runtime.status(controller).detail.startswith("Lost the connection to the Zigbee radio.")
-    finally:
-        await runtime.stop()
+    assert runtime.status(controller).detail.startswith("Lost the connection to the Zigbee radio.")
+    assert new.await_count == len(ZigBeeController.RECONNECT_DELAYS)
+    assert [error.is_still_running for error in output.errors.values()] == [False]
+
+
+async def test_an_unplugged_radio_only_parks_zigbee(running, monkeypatch):
+    controller, runtime, pinned, output = running
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (1,))
+    with _NO_RADIO:
+        controller.connection_lost(ConnectionResetError("unplugged"))  # zigpy at once, the USB scanner a poll later
+        await pinned.unpin("zigbee")
+        await _wait_for(lambda: runtime.status(controller).kind == StatusKind.NEEDS_UNBOUND)
+        await asyncio.sleep(0.1)
+    assert not output.error_log
+    await pinned.pin(conftest.RADIO)
+    await _wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+
+
+async def test_a_radio_lost_while_zigbee_starts_is_reopened_once_it_started(zigbee):
+    controller, output, _repo, app = zigbee
+    async with controller._radio:  # as while start() opens it
+        controller.connection_lost(ConnectionResetError("lost"))
+        await asyncio.sleep(0.05)
+        assert controller._application is app
+    await _wait_for(lambda: controller._application is not None and controller._application is not app)
+    assert not output.error_log
+
+
+async def test_a_radio_lost_while_zigbee_stops_isnt_reopened(zigbee, zigpy_apps, monkeypatch):
+    controller, _output, _repo, app = zigbee
+    monkeypatch.setattr(ZigBeeController, "RECONNECT_DELAYS", (0,))
+
+    async def interview():  # cut short by the stop, as the radio goes
+        try:
+            await asyncio.Event().wait()
+        finally:
+            app.connection_lost(ConnectionResetError("lost while stopping"))
+
+    controller._create_task(interview())
+    await asyncio.sleep(0)
+    await controller.stop()
+    await asyncio.sleep(0.05)
+    assert controller._application is None
+    assert len(zigpy_apps) == 1
 
 
 async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
@@ -370,6 +432,7 @@ async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
     await controller.stop()
     await asyncio.sleep(0.05)
     assert not output.errors
+    assert controller._reconnecting is None
 
 
 async def test_a_stop_cut_short_while_closing_the_radio_lets_go_of_it(zigbee):
@@ -386,9 +449,6 @@ async def test_a_stop_cut_short_while_closing_the_radio_lets_go_of_it(zigbee):
     del app.shutdown  # the fixture's own stop() returns
     assert controller._application is None
     assert not controller.discoveries
-
-
-_NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))
 
 
 async def test_a_start_that_cant_open_the_radio_stops_cleanly():

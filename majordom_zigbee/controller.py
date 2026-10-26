@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 from enum import Enum
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 from uuid import UUID
 
 import zigpy.endpoint
@@ -248,6 +248,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         )
 
     needs = [Need("zigbee", ZIGPY_DIALECTS)]
+    # Seconds before each try to reopen a lost radio; once the last one fails, Zigbee can't go on
+    RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)
 
     _zigbee_device_path: str
     _zigbe_db: str
@@ -270,6 +272,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._availability: dict[UUID, bool] = {}  # device_id -> last signalled availability
         self._tasks: set[asyncio.Task] = set()
         self._application: ControllerApplication | None = None  # while started
+        self._radio = asyncio.Lock()  # held while the radio opens or reopens
+        self._reconnecting: asyncio.Task | None = None
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -296,6 +300,19 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # -------------------------------------------------------------------------
 
     async def start(self):
+        async with self._radio:
+            await self._open()
+
+    async def stop(self):
+        log.debug("[STOP] shutting down")
+        while reconnecting := self._reconnecting:  # the radio it opened may report a loss as it is cancelled
+            self._reconnecting = None
+            reconnecting.cancel()
+            await asyncio.gather(reconnecting, return_exceptions=True)
+        await self._close()
+
+    async def _open(self):
+        """Starts zigpy on the bound radio and takes over the devices on its network."""
         link = self.peripherals.endpoint("zigbee")
         settings = self.settings
         self._zigbee_device_path = link.url
@@ -367,20 +384,21 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 self._availability[device.id] = False  # baseline for mid-session transitions
                 await device_repo.save(device, device.id)
 
-    async def stop(self):
-        log.debug("[STOP] shutting down")
+    async def _close(self):
+        """Lets go of the radio and of what was found on it."""
+        # Let go first: the runtime abandons a stop stuck on a vanished radio, cancelling it inside shutdown()
+        application, self._application = self._application, None
+        if application:
+            application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
         for task in self._tasks:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
-        # Let go first: the runtime abandons a stop stuck on a vanished radio, cancelling it inside shutdown()
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
-        if application := self._application:
-            self._application = None
-            application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
+        if application:
             await application.shutdown()
 
     # -------------------------------------------------------------------------
@@ -778,11 +796,31 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # -------------------------------------------------------------------------
 
     def connection_lost(self, exc: Exception):
-        """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
-        reconnect by itself: tell the runtime, which restarts the integration."""
+        """zigpy lost the radio (the stick re-enumerated, or the service in front of it restarted) and doesn't
+        reconnect by itself: reopen it in place. An unplugged stick stops Zigbee through its lost need instead."""
         log.warning(f"[RADIO] connection lost: {exc!r}")
+        if self._reconnecting:
+            self._reconnecting.cancel()  # lost again while it reopened: start over
+        self._reconnecting = asyncio.create_task(self._reconnect())
+
+    async def _reconnect(self):
+        async with self._radio:
+            lost = list(self._majordom_discoveries)
+            await self._close()
+            for discovery_id in lost:
+                await self.output.controller_did_lose_discovery(self, discovery_id)
+            for delay in self.RECONNECT_DELAYS:
+                await asyncio.sleep(delay)
+                try:
+                    await self._open()
+                except Exception as e:
+                    log.warning(f"[RADIO] reconnecting failed: {e!r}")
+                    await self._close()
+                else:
+                    log.info("[RADIO] reconnected")
+                    return
         error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
-        self._create_task(self.output.controller_did_encounter_error(self, error))
+        await self.output.controller_did_encounter_error(self, error)
 
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""

@@ -37,7 +37,7 @@ async def test_the_radios_network_fills_in_the_settings(zigpy_apps):
         (app,) = zigpy_apps
         assert app.given_config and app.given_config[CONF_NWK] == {CONF_NWK_TX_POWER: 8}
         assert controller.settings == ZigBeeController.Settings(
-            channel=15, pan_id=0x1234, extended_pan_id=EXTENDED_PAN_ID, tx_power=8
+            channel=15, pan_id="0x1234", extended_pan_id=EXTENDED_PAN_ID, tx_power=8
         )
     finally:
         await controller.stop()

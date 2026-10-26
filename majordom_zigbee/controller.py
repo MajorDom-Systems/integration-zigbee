@@ -263,7 +263,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     class Settings(BaseModel):
         # The network the radio runs, filled in once it starts: moving it is a network takeover, not a setting
         channel: int | None = Field(None, title="Channel", json_schema_extra={"readOnly": True})
-        pan_id: int | None = Field(None, title="PAN ID", json_schema_extra={"readOnly": True})
+        pan_id: str | None = Field(None, title="PAN ID", json_schema_extra={"readOnly": True})
         extended_pan_id: str | None = Field(None, title="Extended PAN ID", json_schema_extra={"readOnly": True})
         tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
             None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
@@ -373,7 +373,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._opened_at = time.monotonic()
         log.debug(f"[READY] connected to {self._zigbee_device_path}")
         network = self._application.state.network_info
-        self.settings.channel, self.settings.pan_id = int(network.channel), int(network.pan_id)
+        self.settings.channel, self.settings.pan_id = int(network.channel), f"0x{int(network.pan_id):04X}"
         self.settings.extended_pan_id = str(network.extended_pan_id)
 
         self._availability.clear()  # report every device's availability afresh

@@ -28,6 +28,7 @@ from zigpy.zcl.foundation import Status as ZCLStatus
 
 import majordom_zigbee
 from majordom_zigbee import ZigBeeController, ZigpyDriver
+from majordom_zigbee.listener import ZBAttributeUpdatedListener
 from majordom_zigbee.model import ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
 
@@ -159,6 +160,21 @@ async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery
     with patch("majordom_zigbee.controller.asyncio.sleep", AsyncMock()):
         await controller._disconnect_unpaired_discovery(UUID(DEVICE_ID), conftest.MOCK_IEEE)
     remove.assert_awaited_once_with(conftest.MOCK_IEEE)
+
+
+async def test_stop_ends_an_attribute_report_in_flight(zigbee):
+    controller, output, _repo, app = zigbee
+    cluster = conftest._make_mock_zb_device(app).endpoints[1].in_clusters[OnOff.cluster_id]
+
+    async def busy(*_):  # the Hub still taking it
+        await asyncio.Event().wait()
+
+    output.controller_did_receive_events = busy
+    before = asyncio.all_tasks()
+    ZBAttributeUpdatedListener(controller, UUID(DEVICE_ID), cluster).attribute_updated(0, True, None)
+    (report,) = asyncio.all_tasks() - before
+    await controller.stop()
+    assert report.cancelled()
 
 
 def _move_ids(controller) -> tuple[str, list[str]]:

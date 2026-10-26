@@ -1,6 +1,7 @@
 """Unit tests driving ZigBeeController directly against the in-memory zigpy stub."""
 
 import asyncio
+import time
 from dataclasses import replace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -13,6 +14,7 @@ import zigpy.application
 import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zcl
+import zigpy.zdo.types as zdo_t
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID, wait_for
 from majordom_integration_sdk import Peripherals
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
@@ -156,7 +158,8 @@ async def test_unpairs_a_device(zigbee):
     assert MOCK_IEEE not in app.devices
 
 
-async def test_a_start_reports_the_paired_devices_on_the_network_connected(zigbee, monkeypatch):
+async def _restart_with_the_device_last_seen(zigbee, monkeypatch, hours_ago: float | None, *, mains: bool = False):
+    """Pairs the mock device, then starts Zigbee again on a network whose database says when it last heard from it."""
     controller, output, _repo, _app = zigbee
     discovery = await _pair(zigbee)
     await wait_for(lambda: discovery.id in output.connected_devices)
@@ -164,11 +167,37 @@ async def test_a_start_reports_the_paired_devices_on_the_network_connected(zigbe
     output.connected_devices.clear()
 
     async def startup(app, *, auto_form: bool = False):  # zigpy loads the network's devices from its database
-        conftest._make_mock_zb_device(app)
+        device = conftest._make_mock_zb_device(app)
+        if mains and (node_desc := device.node_desc):
+            node_desc.mac_capability_flags |= zdo_t.NodeDescriptor.MACCapabilityFlags.MainsPowered
+        device.last_seen = None if hours_ago is None else time.time() - hours_ago * 60 * 60
 
     monkeypatch.setattr(conftest._MockZigpyApp, "startup", startup)
     await controller.start()
-    assert output.connected_devices == [discovery.id]
+    return discovery
+
+
+@pytest.mark.parametrize(
+    ("mains", "hours_ago", "connected"),
+    [(True, 1, True), (True, 3, False), (False, 5, True), (False, 7, False), (False, None, False)],
+)
+async def test_a_start_reports_the_paired_devices_seen_lately_connected(
+    zigbee, monkeypatch, mains, hours_ago, connected
+):
+    """Home Assistant's rule: seen within 2 h (mains) or 6 h (battery). One that left or died stays unavailable."""
+    _controller, output, _repo, _app = zigbee
+    discovery = await _restart_with_the_device_last_seen(zigbee, monkeypatch, hours_ago, mains=mains)
+    assert output.connected_devices == ([discovery.id] if connected else [])
+    assert output.lost_devices == []  # the Hub holds them unavailable already
+
+
+async def test_any_message_from_a_device_seen_long_ago_brings_it_back(zigbee, monkeypatch):
+    controller, output, _repo, _app = zigbee
+    discovery = await _restart_with_the_device_last_seen(zigbee, monkeypatch, 7)
+    assert output.connected_devices == []
+    app = controller._application
+    app.listener_event("handle_message", app.get_device(conftest.MOCK_IEEE), 260, OnOff.cluster_id, 1, 1, b"")
+    await wait_for(lambda: output.connected_devices == [discovery.id])
 
 
 def _flip_the_switch(app: zigpy.application.ControllerApplication):

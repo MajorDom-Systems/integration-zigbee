@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from enum import Enum
 from typing import Any, ClassVar, cast, override
 from uuid import UUID
@@ -87,6 +88,10 @@ _quirks_loaded = False
 _UNSUPPORTED_STATUSES = frozenset({ZCLStatus.UNSUPPORTED_ATTRIBUTE, ZCLStatus.UNSUPPORTED_CLUSTER})
 
 
+# Home Assistant's (ZHA's) rule: a device not heard from for this long is unavailable until its next message
+_CONSIDER_UNAVAILABLE_MAINS = 2 * 60 * 60
+_CONSIDER_UNAVAILABLE_BATTERY = 6 * 60 * 60
+
 _SETTING_ENTITY_TYPES = frozenset({"config", "diagnostic"})
 _SENSOR_PLATFORMS = frozenset({"sensor", "binary_sensor"})
 
@@ -132,6 +137,14 @@ def _ensure_quirks_loaded():
     zhaquirks.setup()
     _quirks_loaded = True
     log.debug("[QUIRKS] zhaquirks registered into zigpy registry")
+
+
+def _is_seen_lately(zbdevice: ZPDevice) -> bool:
+    if zbdevice.last_seen is None:
+        return False
+    is_mains_powered = zbdevice.node_desc is not None and zbdevice.node_desc.is_mains_powered
+    allowed = _CONSIDER_UNAVAILABLE_MAINS if is_mains_powered else _CONSIDER_UNAVAILABLE_BATTERY
+    return time.time() - zbdevice.last_seen < allowed
 
 
 def _zb_path(
@@ -384,8 +397,12 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 device.last_error = f"Device {device.name} is no longer connected to the ZigBee network"
                 self._availability[device.id] = False  # baseline for mid-session transitions
                 await device_repo.save(device, device.id)
-        for device_id in list(self._connected_devices):  # the Hub marked them unavailable when Zigbee stopped
-            await self._set_availability(device_id, True)
+        # the Hub marked them unavailable when Zigbee stopped
+        for device_id, zbdevice in list(self._connected_devices.items()):
+            if _is_seen_lately(zbdevice):
+                await self._set_availability(device_id, True)
+            else:
+                self._availability[device_id] = False  # left or died: until its next message
 
     async def _close(self):
         """Lets go of the radio and of what was found on it."""
@@ -886,6 +903,12 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
         if device_id in self._connected_devices:
             self._create_task(self._set_availability(device_id, False))
+
+    def handle_message(self, device: ZPDevice, *_):
+        """Any message from a device: one held unavailable is back."""
+        device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
+        if self._availability.get(device_id) is False and device_id in self._connected_devices:
+            self._create_task(self._set_availability(device_id, True))
 
     async def _set_availability(self, device_id: UUID, available: bool):
         """Single funnel for availability transitions — dedupes so the Hub is only told on an

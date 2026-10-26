@@ -28,17 +28,17 @@ class ZBParameterIntegrationData(BaseModel):
     default_arguments: dict | None = None
 
 
-class ZBDevice(Device):
-    integration_data: ZBDeviceIntegrationData
+class ZBDevice(Device[ZBDeviceIntegrationData]):
+    pass
 
 
-class ZBParameter(Parameter):
-    integration_data: ZBParameterIntegrationData
+class ZBParameter(Parameter[ZBParameterIntegrationData]):
+    pass
 
 
-class ZBParameterState(ParameterState):
-    integration_data: ZBParameterIntegrationData
+class ZBParameterState(ParameterState[ZBParameterIntegrationData]):
+    pass
 
 
-class ZBDeviceState(ZBDevice, DeviceState):
-    parameters: list[ZBParameterState]
+class ZBDeviceState(ZBDevice, DeviceState[ZBDeviceIntegrationData, ZBParameterIntegrationData]):
+    pass

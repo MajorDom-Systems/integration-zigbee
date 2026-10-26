@@ -13,7 +13,7 @@ from majordom_integration_sdk import Peripherals
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
-from majordom_integration_sdk.testing import RecordingPeripheralOutput, build_test_platform
+from majordom_integration_sdk.testing import build_test_platform
 from zigpy.zcl.clusters.closures import DoorLock, WindowCovering
 from zigpy.zcl.clusters.general import LevelControl, OnOff
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
@@ -43,7 +43,7 @@ async def test_discovers_joining_device(zigbee):
     await _wait_for(lambda: bool(output.received_discoveries))
     discovery = output.received_discoveries[-1]
     assert str(discovery.id) == DEVICE_ID
-    assert discovery.integration == "ZigBee"
+    assert discovery.integration == "zigbee"
     assert UUID(DEVICE_ID) in controller.discoveries
 
 
@@ -64,7 +64,7 @@ async def _seed_provisional(repository, discovery):
                 name="Mock Device",
                 room_id=UUID(int=1),
                 transport=discovery.transport,
-                integration="ZigBee",
+                integration="zigbee",
                 manufacturer=None,
                 parameters=[],
                 integration_data=ZBDeviceIntegrationData(),
@@ -360,8 +360,7 @@ async def test_a_lost_radio_has_the_runtime_restart_it(zigpy_apps, tmp_path):
 
 
 async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
-    controller, _output, _repo, app = zigbee
-    controller.runtime = runtime = RecordingPeripheralOutput()
+    controller, output, _repo, app = zigbee
 
     async def shutdown(*_, **__):  # as with bellows: closing the radio reports the connection lost
         app.connection_lost(ConnectionResetError("closed"))
@@ -369,7 +368,7 @@ async def test_stopping_is_not_reported_as_a_lost_radio(zigbee):
     app.shutdown = shutdown
     await controller.stop()
     await asyncio.sleep(0.05)
-    assert not runtime.failed
+    assert not output.errors
 
 
 _NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))

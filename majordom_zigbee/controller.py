@@ -8,10 +8,15 @@ from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk import Need
-from majordom_integration_sdk.controller import AbstractController, Platform
+from majordom_integration_sdk import AbstractController, IntegrationError, Need, Platform
 from majordom_integration_sdk.schemas.command import DeviceCommand
-from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
+from majordom_integration_sdk.schemas.device import (
+    CredentialsType,
+    Discovery,
+    NonEmptyStr,
+    ParameterState,
+    ProvidedCredentials,
+)
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import (
     ParameterDataType,
@@ -294,7 +299,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         link = self.peripherals.endpoint("zigbee")
         settings = self.settings
         self._zigbee_device_path = link.url
-        self._zigbe_db = str(self.documents_folder / "zigbee.db")
+        self._zigbe_db = str(self.platform.documents_folder(self) / "zigbee.db")
         log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
         network = {
             CONF_NWK_CHANNEL: settings.channel,
@@ -327,7 +332,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._application.add_listener(self)
         log.debug("[READY] connected to %s", self._zigbee_device_path)
 
-        async with self.device_repository() as device_repo:
+        async with self.platform.device_repository(self) as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices
             # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
             for zbdevice in self._application.devices.values():
@@ -363,11 +368,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     async def stop(self):
         log.debug("[STOP] shutting down")
-        tasks = self._tasks - {asyncio.current_task()}  # the runtime stops it from the task reporting the lost radio
-        for task in tasks:
+        for task in self._tasks:
             task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         if self._application:
             self._application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
@@ -390,7 +394,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     async def pair_device(
         self, discovery: Discovery, credentials: ProvidedCredentials | None
     ):  # Break down into submethods
-        async with self.device_repository() as device_repository:
+        async with self.platform.device_repository(self) as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
@@ -403,7 +407,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
             # Manufacturer-provided, read-only description — the ZCL model string.
             device.description = zbdevice.model or None
-            parameters: list[ZBParameterState] = list()
+            parameters: list[ParameterState[ZBParameterIntegrationData]] = list()
             # v2 QuirkBuilder entity judgment for this device (empty for non-quirked devices).
             quirk_ux = quirk_ux_map(zbdevice)
             for endpoint in zbdevice.non_zdo_endpoints:
@@ -691,7 +695,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         log.debug(
             "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
         )
-        await self.platform.output.controller_did_receive_events(self, events)
+        await self.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
@@ -778,7 +782,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
         reconnect by itself: tell the runtime, which restarts the integration."""
         log.warning("[RADIO] connection lost: %r", exc)
-        self._create_task(self.runtime.peripheral_did_fail(self, "Lost the connection to the Zigbee radio."))
+        error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
+        self._create_task(self.output.controller_did_encounter_error(self, error))
 
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""
@@ -818,7 +823,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         # Otherwise it's a new, not-yet-paired device -> surface it as a discovery.
         discovery = Discovery(
             id=device_id,
-            integration=NonEmptyStr(self.name),
+            integration=NonEmptyStr(self.key),
             expected_credentials_options=[CredentialsType.none],
             expiration=None,
             transport=NonEmptyStr("ZIGBEE"),
@@ -830,7 +835,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         self._majordom_discoveries[device_id] = discovery
         self._awaiting_zb_discoveries[device_id] = device
         log.debug("[DISCOVERY] ieee=%s  discovery_id=%s", device.ieee, device_id)
-        self._create_task(self.platform.output.controller_did_receive_discovery(self, discovery))
+        self._create_task(self.output.controller_did_receive_discovery(self, discovery))
 
     def device_left(self, device: ZPDevice):
         """A device left the Zigbee network. If it's one of ours, mark it unavailable so the app
@@ -847,9 +852,9 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             return
         self._availability[device_id] = available
         if available:
-            await self.platform.output.controller_did_connect_device(self, device_id)
+            await self.output.controller_did_connect_device(self, device_id)
         else:
-            await self.platform.output.controller_did_lose_device(self, device_id)
+            await self.output.controller_did_lose_device(self, device_id)
 
     # -------------------------------------------------------------------------
     # Private helpers

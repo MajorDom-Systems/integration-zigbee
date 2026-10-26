@@ -18,9 +18,8 @@ import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
 from majordom_integration_sdk import Endpoint, Peripherals
-from majordom_integration_sdk.controller import Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
-from majordom_integration_sdk.testing import RecordingControllerOutput
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 
 from majordom_zigbee import ZigBeeController
 
@@ -149,19 +148,9 @@ async def zigbee(zigpy_apps):
     """Started ZigBeeController wired to an in-memory zigpy stub, plus the recording output
     and repository so tests can assert on both sides."""
     store: dict = {}  # what every integration's repository shares, each scoped to its own devices
-    repository = DeviceRepositoryMemory(integration="ZigBee", store=store)
-    output = RecordingControllerOutput()
-
-    import tempfile
-    from pathlib import Path
-
-    deps = Platform(
-        output=output,
-        make_device_repository=lambda integration: DeviceRepositoryMemory(integration, store).session(),
-        documents_folder=Path(tempfile.mkdtemp()),
-    )
-
-    controller = ZigBeeController(deps)
+    repository = DeviceRepositoryMemory(integration="zigbee", store=store)
+    controller = ZigBeeController(build_test_platform(store=store))
+    controller.output = output = RecordingControllerOutput()
     controller.peripherals = Peripherals({"zigbee": RADIO})
     await controller.start()
     zigpy_apps[0]._zb_controller = controller

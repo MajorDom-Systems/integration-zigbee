@@ -23,4 +23,4 @@ class ZBAttributeUpdatedListener:
             value=self._controller._mapper.normalize_zigbee_value(value),
         )
 
-        asyncio.create_task(self._controller.platform.output.controller_did_receive_events(self._controller, [event]))
+        asyncio.create_task(self._controller.output.controller_did_receive_events(self._controller, [event]))

@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Any
 
 from majordom_integration_sdk.schemas.base import Base
 from majordom_integration_sdk.schemas.device import Device, DeviceState, Parameter, ParameterState
@@ -25,7 +26,7 @@ class ZBParameterIntegrationData(BaseModel):
     # and send_command accepts both. This only carries *what to send*. send_command applies it when a
     # command arrives with no value (i.e. the user tapped the main parameter). Mirrors Matter's
     # default_arguments.
-    default_arguments: dict | None = None
+    default_arguments: dict[str, Any] | None = None
 
 
 class ZBDevice(Device[ZBDeviceIntegrationData]):

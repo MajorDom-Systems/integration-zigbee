@@ -170,11 +170,22 @@ async def test_a_start_reports_the_paired_devices_on_the_network_connected(zigbe
 
 
 async def test_the_unpaired_timer_removes_a_device_that_never_became_a_discovery(zigbee):
-    controller, _output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
+    controller, output, _repo, app = zigbee  # its interview failed at start, or it joined twice within the timer
     app.remove = remove = AsyncMock()
     with patch("majordom_zigbee.controller.asyncio.sleep", AsyncMock()):
         await controller._disconnect_unpaired_discovery(UUID(DEVICE_ID), conftest.MOCK_IEEE)
     remove.assert_awaited_once_with(conftest.MOCK_IEEE)
+    assert output.lost_discoveries == []  # the Hub never heard of it
+
+
+async def test_the_unpaired_timer_removes_a_discovery_and_tells_the_hub(zigbee):
+    controller, output, _repo, app = zigbee
+    discovery = await _discover(controller, output)
+    with patch("majordom_zigbee.controller.asyncio.sleep", AsyncMock()):
+        await controller._disconnect_unpaired_discovery(discovery.id, conftest.MOCK_IEEE)
+    assert conftest.MOCK_IEEE not in app.devices
+    assert discovery.id not in controller.discoveries
+    assert output.lost_discoveries == [discovery.id]
 
 
 async def test_stop_ends_an_attribute_report_in_flight(zigbee):

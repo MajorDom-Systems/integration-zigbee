@@ -117,7 +117,7 @@ def _load(radio: Radio) -> type[ControllerApplication] | None:
     try:
         module = importlib.import_module(module_path)
     except ImportError:
-        log.debug("zigbee radio %r unavailable (%s not installed)", radio.key, radio.package)
+        log.debug(f"zigbee radio {radio.key!r} unavailable ({radio.package} not installed)")
         return None
     return getattr(module, cls_name)
 
@@ -133,7 +133,7 @@ async def detect(device_config: dict) -> tuple[Radio, type[ControllerApplication
             if await app.probe(device_config):
                 return radio, app
         except Exception as exc:  # noqa: BLE001 — any probe failure just means "not this radio"
-            log.debug("zigbee radio %r did not match: %s", radio.key, exc)
+            log.debug(f"zigbee radio {radio.key!r} did not match: {exc}")
     return None
 
 
@@ -157,12 +157,12 @@ async def resolve_application(
                 f"Zigbee radio {radio.key!r} was selected but {radio.package!r} is not installed. "
                 f"Install it with: pip install 'majordom-zigbee[{radio.key}]'."
             )
-        log.info("zigbee radio pinned to %r (%s)", radio.key, radio.description)
+        log.info(f"zigbee radio pinned to {radio.key!r} ({radio.description})")
         return app
 
     if found := await detect(device_config):
         radio, app = found
-        log.info("zigbee radio auto-detected as %r (%s)", radio.key, radio.description)
+        log.info(f"zigbee radio auto-detected as {radio.key!r} ({radio.description})")
         return app
     raise RuntimeError(
         f"Could not auto-detect the zigbee radio on {device_config.get(CONF_DEVICE_PATH, '?')}. "

@@ -121,7 +121,7 @@ def quirk_ux_map(zbdevice: ZPDevice) -> dict[tuple[int, int, str], UxSpec]:
     return out
 
 
-def _ensure_quirks_loaded() -> None:
+def _ensure_quirks_loaded():
     """Register zhaquirks into zigpy's process-global registry, once. Must run before the
     radio interviews devices so a joined device is presented in its quirked form —
     manufacturer clusters decoded into named/typed attributes and v2 entity metadata
@@ -181,7 +181,7 @@ def _check_zcl_failures(
     zbdevice: "ZPDevice | None" = None,
     endpoint: "zigpy.endpoint.Endpoint | None" = None,
     raise_errors: bool = True,
-) -> None:
+):
     """Handle ZCL-level failures from read_attributes or write_attributes.
 
     Registers unsupported attributes on the cluster and logs them at DEBUG.
@@ -300,7 +300,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         settings = self.settings
         self._zigbee_device_path = link.url
         self._zigbe_db = str(self.platform.documents_folder(self) / "zigbee.db")
-        log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
+        log.debug(f"[START] port={self._zigbee_device_path}  db={self._zigbe_db}")
         network = {
             CONF_NWK_CHANNEL: settings.channel,
             CONF_NWK_PAN_ID: settings.pan_id,
@@ -330,7 +330,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 raise PermissionError(msg) from e
             raise
         self._application.add_listener(self)
-        log.debug("[READY] connected to %s", self._zigbee_device_path)
+        log.debug(f"[READY] connected to {self._zigbee_device_path}")
 
         async with self.platform.device_repository(self) as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices
@@ -343,18 +343,17 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                     self._connected_devices[device_id] = zbdevice
                     self._availability[device_id] = True  # baseline for mid-session transitions
                     await self._subscribe(device_id, zbdevice)
-                    log.debug("[KNOWN] ieee=%s  nwk=0x%04X", zbdevice.ieee, zbdevice.nwk)
+                    log.debug(f"[KNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X}")
                 else:
                     self._create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
                     log.debug(
-                        "[UNKNOWN] ieee=%s  nwk=0x%04X — not in DB, starting disconnect timer",
-                        zbdevice.ieee,
-                        zbdevice.nwk,
+                        f"[UNKNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X} — "
+                        "not in DB, starting disconnect timer"
                     )
                     try:
                         await zbdevice.initialize()
                     except Exception:
-                        log.exception("[UNKNOWN] initialize failed for ieee=%s", zbdevice.ieee)
+                        log.exception(f"[UNKNOWN] initialize failed for ieee={zbdevice.ieee}")
 
             # Any device in our DB that isn't on the network anymore is marked unavailable on boot.
             for device in await device_repo.get_all(as_=ZBDevice):
@@ -385,10 +384,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
+    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None):
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
-        log.debug("[PERMIT-JOIN] opening for %ds", duration_sec)
+        log.debug(f"[PERMIT-JOIN] opening for {duration_sec}s")
         await self._application.permit(duration_sec)
 
     async def pair_device(
@@ -427,7 +426,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                         timeout=2,
                     )
                     if self._is_unimplemented(cluster):
-                        log.debug("[PAIR] skipping unimplemented %s", _zb_path(endpoint=endpoint, cluster=cluster))
+                        log.debug(f"[PAIR] skipping unimplemented {_zb_path(endpoint=endpoint, cluster=cluster)}")
                         continue
                     for attribute_id, attribute in cluster.attributes.items():
                         if cluster.is_attribute_unsupported(attribute_id):
@@ -454,11 +453,9 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                         )
                         if source.startswith("fallback"):
                             log.warning(
-                                "[PAIR] uncurated attribute %s -> %s (%s); add to OUR_ATTRIBUTE_UX "
-                                "or refresh the zha harvest",
-                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
-                                visibility.value,
-                                source,
+                                "[PAIR] uncurated attribute "
+                                f"{_zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True)} -> "
+                                f"{visibility.value} ({source}); add to OUR_ATTRIBUTE_UX or refresh the zha harvest"
                             )
 
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
@@ -485,10 +482,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                         )
                         for missing_attr in missing_bounds:
                             log.debug(
-                                "[PAIR] metadata source %s not reported for %s — quirk or unsupported; "
-                                "using wire-type default",
-                                _zb_path(cluster=cluster, attr_id=missing_attr, attr_only=True),
-                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
+                                "[PAIR] metadata source "
+                                f"{_zb_path(cluster=cluster, attr_id=missing_attr, attr_only=True)} not reported for "
+                                f"{_zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True)} — "
+                                "quirk or unsupported; using wire-type default"
                             )
 
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
@@ -621,7 +618,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     async def unpair(self, device: ZBDevice):
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
-        log.debug("[UNPAIR] ieee=%s", device.integration_data.ieee)
+        log.debug(f"[UNPAIR] ieee={device.integration_data.ieee}")
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.device_uuid_from_ieee(device.integration_data.ieee))
 
@@ -642,7 +639,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 continue
             await cluster.identify(10)  # 10 - identification time
 
-    async def fetch(self, device: ZBDevice) -> None:
+    async def fetch(self, device: ZBDevice):
         if not self._application:
             raise ZBConnectionError("ZigBee application is not started")
 
@@ -653,7 +650,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         if not zbdevice.is_initialized:
             raise ZBUnexpectedError(f"Device {ieee} is not initialized")
         events: list[DeviceParameterChange] = list()
-        log.debug("[FETCH] start device=%s(%s)", device.id, zbdevice.model)
+        log.debug(f"[FETCH] start device={device.id}({zbdevice.model})")
         t0 = asyncio.get_event_loop().time()
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
@@ -692,9 +689,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                         )
                     )
 
-        log.debug(
-            "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
-        )
+        duration = asyncio.get_event_loop().time() - t0
+        log.debug(f"[FETCH] done device={device.id}({zbdevice.model}) duration={duration:.2f}s")
         await self.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
@@ -781,13 +777,13 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     def connection_lost(self, exc: Exception):
         """zigpy lost the radio (unplugged, or the service in front of it restarted) and doesn't
         reconnect by itself: tell the runtime, which restarts the integration."""
-        log.warning("[RADIO] connection lost: %r", exc)
+        log.warning(f"[RADIO] connection lost: {exc!r}")
         error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
         self._create_task(self.output.controller_did_encounter_error(self, error))
 
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""
-        log.debug("[JOIN] ieee=%s  nwk=0x%04X", device.ieee, device.nwk)
+        log.debug(f"[JOIN] ieee={device.ieee}  nwk=0x{device.nwk:04X}")
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
         # Zigbee has no separate "discovery": a device is on the network as soon as it joins.
         # We hold it in the awaiting list and disconnect it if it isn't paired in majordom within
@@ -799,11 +795,8 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         """A device finished interviewing and is ready to talk. Fires both for a brand-new join
         and when an already-paired device rejoins the network after being offline."""
         log.debug(
-            "[INIT] ieee=%s  nwk=0x%04X  model=%r  manufacturer=%r",
-            device.ieee,
-            device.nwk,
-            device.model,
-            device.manufacturer,
+            f"[INIT] ieee={device.ieee}  nwk=0x{device.nwk:04X}  "
+            f"model={device.model!r}  manufacturer={device.manufacturer!r}"
         )
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
 
@@ -834,18 +827,18 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         )
         self._majordom_discoveries[device_id] = discovery
         self._awaiting_zb_discoveries[device_id] = device
-        log.debug("[DISCOVERY] ieee=%s  discovery_id=%s", device.ieee, device_id)
+        log.debug(f"[DISCOVERY] ieee={device.ieee}  discovery_id={device_id}")
         self._create_task(self.output.controller_did_receive_discovery(self, discovery))
 
     def device_left(self, device: ZPDevice):
         """A device left the Zigbee network. If it's one of ours, mark it unavailable so the app
         reflects it; the pairing stays in the DB so it comes back online on rejoin."""
-        log.debug("[LEFT] ieee=%s  nwk=0x%04X", device.ieee, device.nwk)
+        log.debug(f"[LEFT] ieee={device.ieee}  nwk=0x{device.nwk:04X}")
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
         if device_id in self._connected_devices:
             self._create_task(self._set_availability(device_id, False))
 
-    async def _set_availability(self, device_id: UUID, available: bool) -> None:
+    async def _set_availability(self, device_id: UUID, available: bool):
         """Single funnel for availability transitions — dedupes so the Hub is only told on an
         actual change, and translates it into the framework's connect / lose callbacks."""
         if self._availability.get(device_id) == available:
@@ -860,17 +853,15 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
     # Private helpers
     # -------------------------------------------------------------------------
 
-    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice) -> None:
-        log.debug("[PAIR] starting background fetch device=%s(%s)", device.id, zbdevice.model)
+    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice):
+        log.debug(f"[PAIR] starting background fetch device={device.id}({zbdevice.model})")
         try:
             await self.fetch(device)
         except Exception as e:
-            log.warning(
-                "[PAIR] fetch failed for device=%s(%s), skipping connect signal: %s", device.id, zbdevice.model, e
-            )
+            log.warning(f"[PAIR] fetch failed for device={device.id}({zbdevice.model}), skipping connect signal: {e}")
             return
         await self._set_availability(device.id, True)
-        log.debug("[PAIR] background fetch done, device connected device=%s(%s)", device.id, zbdevice.model)
+        log.debug(f"[PAIR] background fetch done, device connected device={device.id}({zbdevice.model})")
 
     async def _read_cluster_attributes(
         self,
@@ -939,7 +930,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         if discovery_id not in self._majordom_discoveries and discovery_id in self._connected_devices:
             # if the device was connected
             return
-        log.info("[REMOVE] %s wasn't paired within 5 minutes: removing it from the network", ieee)
+        log.info(f"[REMOVE] {ieee} wasn't paired within 5 minutes: removing it from the network")
         assert self._application  # stop() cancels this task before it lets go of the application
         await self._application.remove(ieee)
         self._majordom_discoveries.pop(discovery_id)

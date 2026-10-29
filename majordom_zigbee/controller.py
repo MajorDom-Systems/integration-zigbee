@@ -11,6 +11,7 @@ from uuid import UUID
 import zigpy.endpoint
 import zigpy.zcl
 from majordom_integration_sdk import STABLE_RUN, AbstractController, Endpoint, IntegrationError, Need, Platform
+from majordom_integration_sdk import SettingsExtraField as Extra
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import (
     CredentialsType,
@@ -262,9 +263,9 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
     class Settings(BaseModel):
         # The network the radio runs, filled in once it starts: moving it is a network takeover, not a setting
-        channel: int | None = Field(None, title="Channel", json_schema_extra={"readOnly": True})
-        pan_id: str | None = Field(None, title="PAN ID", json_schema_extra={"readOnly": True})
-        extended_pan_id: str | None = Field(None, title="Extended PAN ID", json_schema_extra={"readOnly": True})
+        channel: int | None = Field(None, title="Channel", json_schema_extra={Extra.read_only: True})
+        pan_id: str | None = Field(None, title="PAN ID", json_schema_extra={Extra.read_only: True})
+        extended_pan_id: str | None = Field(None, title="Extended PAN ID", json_schema_extra={Extra.read_only: True})
         tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
             None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
         )

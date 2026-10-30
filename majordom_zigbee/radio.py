@@ -2,42 +2,38 @@
 
 zigpy talks to the coordinator dongle through a per-silicon *radio library* (bellows for Silicon
 Labs EZSP, zigpy-znp for TI Z-Stack, zigpy-deconz for deCONZ, ...). This module maps every
-supported radio to its zigpy ``ControllerApplication`` and resolves the right one for the attached
-dongle — either from explicit config (the ``MAJORDOM_ZIGBEE_RADIO`` env var / the controller's
-``radio`` attribute) or by probing each installed library. Swapping dongles therefore needs only
-the matching library installed, never a source change.
+supported radio to its zigpy ``ControllerApplication``: the controller takes the one the dialect the
+hub bound (``ezsp``, ``znp``, …) names, and ``ZigpyDriver`` probes the installed libraries to tell
+which one a stick speaks. Swapping dongles therefore needs only the matching library installed, never a
+source change.
 
-Add support for a new radio by appending one ``Radio`` entry below — no other code changes.
+Add support for a new radio by appending one ``Radio`` entry below, and its key to ``PROBED`` when a stick speaks it.
 """
 
 from __future__ import annotations
 
 import importlib
 import logging
-import os
 from dataclasses import dataclass
+from typing import Any
 
+from majordom_integration_sdk import Endpoint, UsbDriver
 from zigpy.application import ControllerApplication
-from zigpy.config import CONF_DEVICE_PATH
+from zigpy.config import CONF_DEVICE_BAUDRATE, CONF_DEVICE_PATH, SCHEMA_DEVICE
 
 log = logging.getLogger(__name__)
-
-#: Env var an operator can set (auto | ezsp | znp | deconz | xbee | zigate | cc) to pin the radio
-#: without touching source. Unset / "auto" -> probe every installed radio.
-RADIO_ENV = "MAJORDOM_ZIGBEE_RADIO"
 
 
 @dataclass(frozen=True)
 class Radio:
     """One supported zigpy radio backend."""
 
-    key: str  #: short id used in config (see RADIO_ENV)
+    key: str  #: short id, also the dialect of the hub's ``zigbee`` link
     application: str  #: dotted path to its zigpy ControllerApplication
     package: str  #: the pip package (and extra) that provides it
     description: str  #: human-readable hardware hint
 
 
-# Probed in this order during auto-detection — most common coordinators first.
 RADIOS: tuple[Radio, ...] = (
     Radio(
         "ezsp",
@@ -70,32 +66,27 @@ RADIOS: tuple[Radio, ...] = (
         "ZiGate",
     ),
     Radio(
-        "cc",
-        "zigpy_cc.zigbee.application.ControllerApplication",
-        "zigpy-cc",
-        "Texas Instruments Z-Stack legacy (deprecated)",
+        "ziggurat",
+        "zigpy_ziggurat.zigbee.application.ControllerApplication",
+        "zigpy-ziggurat",
+        "Ziggurat, the open-source host-side Zigbee stack, through its server",
+    ),
+    Radio(
+        "blz",
+        "zigpy_blz.zigbee.application.ControllerApplication",
+        "zigpy-blz",
+        "Bouffalo Lab BL70x via BLZ",
     ),
 )
 
+#: Every dialect a zigpy radio library speaks: what the controller's ``zigbee`` need accepts.
+ZIGPY_DIALECTS: tuple[str, ...] = tuple(r.key for r in RADIOS)
+
 _BY_KEY: dict[str, Radio] = {r.key: r for r in RADIOS}
-#: Friendly aliases so common product/stack names resolve to a radio key.
-_ALIASES: dict[str, str] = {
-    "bellows": "ezsp",
-    "silabs": "ezsp",
-    "ember": "ezsp",
-    "emberznet": "ezsp",
-    "skyconnect": "ezsp",
-    "ti": "znp",
-    "zstack": "znp",
-    "z-stack": "znp",
-    "conbee": "deconz",
-    "raspbee": "deconz",
-}
 
-
-def _normalize(name: str) -> str:
-    name = name.strip().lower()
-    return _ALIASES.get(name, name)
+#: What ``ZigpyDriver`` probes a stick for, in order: the quickest to tell first, ezsp last for the EFR32 sticks the
+#: SDK's Silabs driver didn't identify. Not ziggurat: it speaks through a server's WebSocket, never a stick.
+PROBED: tuple[Radio, ...] = tuple(_BY_KEY[key] for key in ("deconz", "zigate", "xbee", "blz", "znp", "ezsp"))
 
 
 def _load(radio: Radio) -> type[ControllerApplication] | None:
@@ -104,59 +95,48 @@ def _load(radio: Radio) -> type[ControllerApplication] | None:
     try:
         module = importlib.import_module(module_path)
     except ImportError:
-        log.debug("zigbee radio %r unavailable (%s not installed)", radio.key, radio.package)
+        log.debug(f"zigbee radio {radio.key!r} unavailable ({radio.package} not installed)")
         return None
     return getattr(module, cls_name)
 
 
-async def resolve_application(
-    device_config: dict,
-    requested: str | None = None,
-) -> type[ControllerApplication]:
-    """Return the zigpy ``ControllerApplication`` class for the attached coordinator.
+async def detect(device_config: dict[str, Any]) -> tuple[Radio, dict[str, Any]] | None:
+    """The first installed radio library that answers on ``device_config``, and the device config it answered at."""
+    for radio in PROBED:
+        if (app := _load(radio)) is None:
+            continue
+        # zigpy 2 probes only _probe_configs: zigpy-deconz 0.25 and zigpy-blz 0.1 still list their bauds the zigpy 1 way
+        for overrides in getattr(app, "_probe_config_variants", None) or [{}]:
+            config = {**device_config, **overrides}
+            try:
+                # A non-matching radio typically raises (wrong protocol on the port) rather than
+                # returning False — either way we move on to the next candidate.
+                if found := await app.probe(config):
+                    return radio, SCHEMA_DEVICE(found if isinstance(found, dict) else config)
+            except Exception as exc:  # noqa: BLE001 — any probe failure just means "not this radio"
+                log.debug(f"zigbee radio {radio.key!r} did not match: {exc}")
+    return None
 
-    ``requested`` (falling back to the ``MAJORDOM_ZIGBEE_RADIO`` env var): a radio key/alias to
-    force one library, or ``None``/``"auto"`` to probe every installed radio against
-    ``device_config`` and use the first that answers.
-    """
-    requested = requested if requested is not None else os.environ.get(RADIO_ENV)
 
-    if requested and _normalize(requested) != "auto":
-        key = _normalize(requested)
-        radio = _BY_KEY.get(key)
-        if radio is None:
-            raise ValueError(
-                f"Unknown zigbee radio {requested!r}. Known: {', '.join(_BY_KEY)} "
-                f"(or leave {RADIO_ENV} unset / =auto to probe)."
-            )
-        app = _load(radio)
-        if app is None:
-            raise RuntimeError(
-                f"Zigbee radio {radio.key!r} was selected but {radio.package!r} is not installed. "
-                f"Install it with: pip install 'majordom-zigbee[{radio.key}]'."
-            )
-        log.info("zigbee radio pinned to %r (%s)", radio.key, radio.description)
-        return app
-
-    # auto: probe each installed radio; first to answer wins.
-    installed = [(r, app) for r in RADIOS if (app := _load(r)) is not None]
-    if not installed:
+def application_class(dialect: str) -> type[ControllerApplication]:
+    """The zigpy ``ControllerApplication`` of the radio library speaking ``dialect``, which the need took."""
+    radio = _BY_KEY[dialect]
+    if (app := _load(radio)) is None:
         raise RuntimeError(
-            "No zigbee radio library installed. Install one, e.g. "
-            "pip install 'majordom-zigbee[ezsp]' (Silicon Labs) or '[znp]' (TI)."
+            f"Zigbee radio {radio.key!r} needs {radio.package!r}: pip install 'majordom-zigbee[{radio.key}]'."
         )
-    for radio, app in installed:
-        try:
-            # A non-matching radio typically raises (wrong protocol on the port) rather than
-            # returning False — either way we move on to the next candidate.
-            if await app.probe(device_config):
-                log.info("zigbee radio auto-detected as %r (%s)", radio.key, radio.description)
-                return app
-        except Exception as exc:  # noqa: BLE001 — any probe failure just means "not this radio"
-            log.debug("zigbee radio %r did not match: %s", radio.key, exc)
+    return app
 
-    raise RuntimeError(
-        f"Could not auto-detect the zigbee radio on {device_config.get(CONF_DEVICE_PATH, '?')}. "
-        f"Probed: {', '.join(r.key for r, _ in installed)}. "
-        f"Set {RADIO_ENV} to one of: {', '.join(_BY_KEY)}."
-    )
+
+class ZigpyDriver(UsbDriver):
+    """The sticks only zigpy tells apart (ConBee, ZiGate, XBee, ...), for the runtime's USB scanner: the first
+    installed radio library that answers on a stick names its firmware, which serves that dialect of ``zigbee``."""
+
+    name = "zigpy"
+    firmwares = {radio.key: [Endpoint("zigbee", radio.key, "{device}")] for radio in PROBED}
+
+    async def identify(self, path: str) -> tuple[str, dict[str, Any]] | None:
+        if not (found := await detect({CONF_DEVICE_PATH: path})):
+            return None
+        radio, config = found
+        return radio.key, {"baud": config[CONF_DEVICE_BAUDRATE]}

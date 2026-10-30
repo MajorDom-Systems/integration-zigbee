@@ -21,9 +21,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: POSIX :: Linux",
 ]
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.13,<3.14"
 dependencies = [
-    "majordom-integration-sdk (>=0.2.1,<1.0)",
+    "majordom-integration-sdk (>=0.3.0,<1.0)",
     "zigpy (>=2.0.0,<3.0.0)",
     "zigpy-znp (>=1.1.0,<2.0.0)",
     "bellows (>=0.49.2,<0.50.0)",
@@ -37,14 +37,18 @@ dependencies = [
 # Extra coordinator radios. bellows (Silicon Labs EZSP) and zigpy-znp (TI Z-Stack) ship by
 # default; install the extra matching your dongle to switch backends with no source change, e.g.
 #   pip install 'majordom-zigbee[deconz]'
-# The backend is then picked by MAJORDOM_ZIGBEE_RADIO / auto-probe (see majordom_zigbee.radio).
+# The dialect the hub binds the stick with picks the backend (see majordom_zigbee.radio).
 deconz = ["zigpy-deconz (>=0.25.5,<1.0.0)"]  # dresden elektronik ConBee/RaspBee
 xbee = ["zigpy-xbee (>=0.21.1,<1.0.0)"]  # Digi XBee
 zigate = ["zigpy-zigate (>=0.14.0,<1.0.0)"]  # ZiGate
+ziggurat = ["zigpy-ziggurat (>=1.0.1,<2.0.0)"]  # Ziggurat server
+blz = ["zigpy-blz (>=0.1.0,<1.0.0)"]  # Bouffalo Lab BL70x
 all-radios = [
     "zigpy-deconz (>=0.25.5,<1.0.0)",
     "zigpy-xbee (>=0.21.1,<1.0.0)",
     "zigpy-zigate (>=0.14.0,<1.0.0)",
+    "zigpy-ziggurat (>=1.0.1,<2.0.0)",
+    "zigpy-blz (>=0.1.0,<1.0.0)",
 ]
 
 [project.urls]

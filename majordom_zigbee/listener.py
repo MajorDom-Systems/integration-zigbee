@@ -1,4 +1,3 @@
-import asyncio
 from uuid import UUID
 
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
@@ -23,6 +22,4 @@ class ZBAttributeUpdatedListener:
             value=self._controller._mapper.normalize_zigbee_value(value),
         )
 
-        asyncio.create_task(
-            self._controller.dependencies.output.controller_did_receive_events(self._controller, [event])
-        )
+        self._controller._create_task(self._controller.output.controller_did_receive_events(self._controller, [event]))

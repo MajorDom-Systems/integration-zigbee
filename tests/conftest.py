@@ -1,13 +1,17 @@
 """Unit tests for the Zigbee controller.
 
-Drive `ZigBeeController` directly — via the SDK's test dependencies, against an in-memory
+Drive `ZigBeeController` directly — via the SDK's test platform, against an in-memory
 zigpy stub (no radio, no DB). The Hub keeps the e2e (mocked-radio) coverage and the
 real-hardware tests.
 """
 
 import asyncio
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
+import pytest
 import pytest_asyncio
 import zigpy.application
 import zigpy.device
@@ -16,14 +20,9 @@ import zigpy.profiles
 import zigpy.state as app_state
 import zigpy.types as t
 import zigpy.zdo.types as zdo_t
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk import Endpoint, Peripherals
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
-from majordom_integration_sdk.testing import (
-    FakeBLEDiscoveryService,
-    FakeSSDPDiscoveryService,
-    FakeZeroconfDiscoveryService,
-    RecordingControllerOutput,
-)
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 
 from majordom_zigbee import ZigBeeController
 
@@ -31,12 +30,20 @@ from majordom_zigbee import ZigBeeController
 MOCK_IEEE = t.EUI64.convert("00:11:22:33:44:55:66:77")
 MOCK_NWK = t.NWK(0x1234)
 NCP_IEEE = t.EUI64.convert("aa:11:22:bb:33:44:be:ef")
+EXTENDED_PAN_ID = "dd:dd:dd:dd:dd:dd:dd:dd"  # of the network the radio runs, on channel 15 with PAN ID 0x1234
 
 DEVICE_ID = "3ad0d5e0-e32d-5b43-ac8f-150aa969c63d"
 PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"  # toggle command_1/6/2
 PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"  # on_time attribute_1/6/16385 (Read|Write)
 MOCK_INPUT_CLUSTERS: list[int] = [6, 8]  # OnOff, LevelControl; tests may monkeypatch it
 MOCK_OUTPUT_CLUSTERS: list[int] = []  # client-side clusters; tests may monkeypatch it
+RADIO = Endpoint("zigbee", "ezsp", "/dev/null")  # pinned backend: no probing of /dev/null
+
+
+async def wait_for(predicate: Callable[[], bool], timeout: float = 3.0):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.02)
 
 
 def _make_mock_zb_device(app: zigpy.application.ControllerApplication) -> zigpy.device.Device:
@@ -71,6 +78,7 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
     """In-memory zigpy stub — no hardware, no DB."""
 
     _zb_controller = None  # set to the controller after start()
+    given_config: dict[str, Any] | None = None  # what the controller started it with
 
     async def send_packet(self, *_):
         pass
@@ -102,7 +110,10 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
     async def permit_with_link_key(self, *_):
         pass
 
-    async def shutdown(self, *_):
+    async def startup(self, *, auto_form: bool = False):
+        pass
+
+    async def shutdown(self, *, db: bool = True):
         pass
 
     async def load_network_info(self, *, load_devices=False):
@@ -122,35 +133,22 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
             del self.devices[ieee]
 
 
-@pytest_asyncio.fixture
-async def zigbee():
-    """Started ZigBeeController wired to an in-memory zigpy stub, plus the recording output
-    and repository so tests can assert on both sides."""
+@pytest.fixture
+def zigpy_apps():
+    """The in-memory zigpy stubs the controller starts, in order."""
     created: list[_MockZigpyApp] = []
 
-    async def _new(config, auto_form=False):
+    async def _new(config, **_):
         app = _MockZigpyApp({"database_path": None, "device": {"path": "/dev/null"}})
         app.state.node_info = app_state.NodeInfo(
             nwk=t.NWK(0x0000), ieee=NCP_IEEE, logical_type=zdo_t.LogicalType.Coordinator
         )
+        app.state.network_info = app_state.NetworkInfo(
+            channel=15, pan_id=t.PanId(0x1234), extended_pan_id=t.ExtendedPanId.convert(EXTENDED_PAN_ID)
+        )
+        app.given_config = config
         created.append(app)
         return app
-
-    repository = DeviceRepositoryMemory(integration="ZigBee")
-    output = RecordingControllerOutput()
-
-    import tempfile
-    from pathlib import Path
-
-    deps = AbstractController.Dependencies(
-        output=output,
-        make_device_repository=repository.session,
-        documents_folder=Path(tempfile.mkdtemp()),
-        zeroconf_discovery_service=FakeZeroconfDiscoveryService(),
-        ssdp_discovery_service=FakeSSDPDiscoveryService(),
-        ble_discovery_service=FakeBLEDiscoveryService(),
-        hardware_interfaces=["/dev/null"],
-    )
 
     with (
         patch("bellows.zigbee.application.ControllerApplication.new", side_effect=_new),
@@ -158,9 +156,19 @@ async def zigbee():
         patch("zigpy.zcl.Cluster.write_attributes", new_callable=AsyncMock, return_value=[{}, {}]),
         patch("zigpy.zcl.Cluster.command", new_callable=AsyncMock, return_value=None),
     ):
-        controller = ZigBeeController(deps)
-        controller.radio = "ezsp"  # pin the backend in tests (don't probe the fake /dev/null port)
-        await controller.start()
-        created[0]._zb_controller = controller
-        yield controller, output, repository, created[0]
-        await controller.stop()
+        yield created
+
+
+@pytest_asyncio.fixture
+async def zigbee(zigpy_apps):
+    """Started ZigBeeController wired to an in-memory zigpy stub, plus the recording output
+    and repository so tests can assert on both sides."""
+    store: dict[UUID, dict[str, Any]] = {}  # what every integration's repository shares, each scoped to its own devices
+    repository = DeviceRepositoryMemory(integration="zigbee", store=store)
+    controller = ZigBeeController(build_test_platform(store=store))
+    controller.output = output = RecordingControllerOutput()
+    controller.peripherals = Peripherals({"zigbee": RADIO})
+    await controller.start()
+    zigpy_apps[0]._zb_controller = controller
+    yield controller, output, repository, zigpy_apps[0]
+    await controller.stop()

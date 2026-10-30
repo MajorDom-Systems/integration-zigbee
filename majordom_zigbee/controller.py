@@ -2,16 +2,24 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
+import time
+from collections.abc import Coroutine
 from enum import Enum
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 from uuid import UUID
 
 import zigpy.endpoint
 import zigpy.zcl
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk import STABLE_RUN, AbstractController, Endpoint, IntegrationError, Need, Platform
+from majordom_integration_sdk import SettingsExtraField as Extra
 from majordom_integration_sdk.schemas.command import DeviceCommand
-from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, NonEmptyStr, ProvidedCredentials
+from majordom_integration_sdk.schemas.device import (
+    CredentialsType,
+    Discovery,
+    NonEmptyStr,
+    ParameterState,
+    ProvidedCredentials,
+)
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import (
     ParameterDataType,
@@ -19,7 +27,17 @@ from majordom_integration_sdk.schemas.parameter import (
     ParameterUnit,
     ParameterVisibility,
 )
-from zigpy.config import CONF_DATABASE, CONF_DEVICE, CONF_DEVICE_PATH
+from pydantic import BaseModel, Field
+from zigpy.application import ControllerApplication
+from zigpy.config import (
+    CONF_DATABASE,
+    CONF_DEVICE,
+    CONF_DEVICE_BAUDRATE,
+    CONF_DEVICE_FLOW_CONTROL,
+    CONF_DEVICE_PATH,
+    CONF_NWK,
+    CONF_NWK_TX_POWER,
+)
 from zigpy.device import Device as ZPDevice  # ZP - ZigPy
 from zigpy.types import EUI64
 from zigpy.zcl.clusters.general import Identify
@@ -41,7 +59,7 @@ from .model import (
     ZBParameterState,
     ZBParameterType,
 )
-from .radio import resolve_application
+from .radio import ZIGPY_DIALECTS, application_class
 from .zigbee_spec import (
     EVERYDAY_COMMANDS,
     MAIN_PARAMETER_BY_CLUSTER,
@@ -71,6 +89,10 @@ _quirks_loaded = False
 # UNSUPPORTED_CLUSTER, which zigpy fans out to every requested attribute.
 _UNSUPPORTED_STATUSES = frozenset({ZCLStatus.UNSUPPORTED_ATTRIBUTE, ZCLStatus.UNSUPPORTED_CLUSTER})
 
+
+# Home Assistant's (ZHA's) rule: a device not heard from for this long is unavailable until its next message
+_CONSIDER_UNAVAILABLE_MAINS = 2 * 60 * 60
+_CONSIDER_UNAVAILABLE_BATTERY = 6 * 60 * 60
 
 _SETTING_ENTITY_TYPES = frozenset({"config", "diagnostic"})
 _SENSOR_PLATFORMS = frozenset({"sensor", "binary_sensor"})
@@ -104,7 +126,7 @@ def quirk_ux_map(zbdevice: ZPDevice) -> dict[tuple[int, int, str], UxSpec]:
     return out
 
 
-def _ensure_quirks_loaded() -> None:
+async def _ensure_quirks_loaded():
     """Register zhaquirks into zigpy's process-global registry, once. Must run before the
     radio interviews devices so a joined device is presented in its quirked form —
     manufacturer clusters decoded into named/typed attributes and v2 entity metadata
@@ -112,11 +134,23 @@ def _ensure_quirks_loaded() -> None:
     global _quirks_loaded
     if _quirks_loaded:
         return
-    import zhaquirks
 
-    zhaquirks.setup()
+    def setup():
+        import zhaquirks
+
+        zhaquirks.setup()
+
+    await asyncio.to_thread(setup)  # seconds of imports, off the event loop the Hub shares (as Home Assistant does)
     _quirks_loaded = True
     log.debug("[QUIRKS] zhaquirks registered into zigpy registry")
+
+
+def _is_seen_lately(zbdevice: ZPDevice) -> bool:
+    if zbdevice.last_seen is None:
+        return False
+    is_mains_powered = zbdevice.node_desc is not None and zbdevice.node_desc.is_mains_powered
+    allowed = _CONSIDER_UNAVAILABLE_MAINS if is_mains_powered else _CONSIDER_UNAVAILABLE_BATTERY
+    return time.time() - zbdevice.last_seen < allowed
 
 
 def _zb_path(
@@ -155,6 +189,16 @@ def _zb_path(
     return " ".join(parts)
 
 
+def _device_config(link: Endpoint) -> dict[str, Any]:
+    """zigpy's config of the bound radio: its path, and the serial settings its endpoint carries."""
+    config: dict[str, Any] = {CONF_DEVICE_PATH: link.url}
+    if (baud := link.params.get("baud")) is not None:
+        config[CONF_DEVICE_BAUDRATE] = baud
+    if (flow_control := link.params.get("flow_control")) is not None:
+        config[CONF_DEVICE_FLOW_CONTROL] = "hardware" if flow_control else None  # RTS/CTS, as the radios' params mean
+    return config
+
+
 def _check_zcl_failures(
     failures: dict[int | None, ZCLStatus],
     cluster: zigpy.zcl.Cluster,
@@ -164,7 +208,7 @@ def _check_zcl_failures(
     zbdevice: "ZPDevice | None" = None,
     endpoint: "zigpy.endpoint.Endpoint | None" = None,
     raise_errors: bool = True,
-) -> None:
+):
     """Handle ZCL-level failures from read_attributes or write_attributes.
 
     Registers unsupported attributes on the cluster and logs them at DEBUG.
@@ -209,7 +253,7 @@ def _check_zcl_failures(
         log.error(f"{log_prefix} ZCL failures:\n\t{details}")
 
 
-class ZigBeeController(AbstractController):
+class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeController.Settings"]):
     """Bridges the Hub to Zigbee devices through a USB coordinator radio via zigpy.
 
     zigpy owns the Zigbee network, the ZCL, and device interviews; this controller adapts it
@@ -217,10 +261,20 @@ class ZigBeeController(AbstractController):
     is on the network the moment it joins the permit-join window. See readme.md.
     """
 
-    #: Pin a specific radio backend (see majordom_zigbee.radio: "ezsp"/"znp"/"deconz"/...). Left
-    #: None, the MAJORDOM_ZIGBEE_RADIO env var is consulted, and failing that the attached dongle
-    #: is auto-probed — so swapping coordinators needs no source change, only the matching library.
-    radio: str | None = None
+    class Settings(BaseModel):
+        # The network the radio runs, filled in once it starts: moving it is a network takeover, not a setting
+        channel: int | None = Field(None, title="Channel", json_schema_extra={Extra.read_only: True})
+        pan_id: str | None = Field(None, title="PAN ID", json_schema_extra={Extra.read_only: True})
+        extended_pan_id: str | None = Field(None, title="Extended PAN ID", json_schema_extra={Extra.read_only: True})
+        tx_power: int | None = Field(  # zigpy's own range: it refuses to start outside it
+            None, ge=-10, le=20, title="Transmit power, dBm", description="Empty uses the radio default."
+        )
+
+    needs = [Need("zigbee", ZIGPY_DIALECTS)]
+    # Seconds before each try to reopen a lost radio; once the last one fails, Zigbee can't go on
+    RECONNECT_DELAYS: ClassVar[tuple[float, ...]] = (1, 2, 5, 10, 30)
+    # Seconds a reopened radio must hold for its next loss to have every try again (the runtime's stable-run time)
+    STABLE_RUN: ClassVar[float] = STABLE_RUN
 
     _zigbee_device_path: str
     _zigbe_db: str
@@ -230,10 +284,10 @@ class ZigBeeController(AbstractController):
     # (the ZPDevice values could be shrunk to just the IEEE address to save memory, if needed.)
 
     _mapper: ZigBeeMapper
-    _tasks: set[asyncio.Task]
+    _tasks: set[asyncio.Task[Any]]
 
-    def __init__(self, dependencies: AbstractController.Dependencies):
-        super().__init__(dependencies)
+    def __init__(self, platform: Platform, *, settings: Settings | None = None):
+        super().__init__(platform, settings=settings)
         # Mapper is wired with the framework's UUID generators so every Zigbee id is namespaced
         # consistently under the integration and device (see ZigBeeMapper).
         self._mapper = ZigBeeMapper(self.device_uuid, self.parameter_uuid)
@@ -241,7 +295,13 @@ class ZigBeeController(AbstractController):
         self._awaiting_zb_discoveries: dict[UUID, ZPDevice] = {}
         self._connected_devices: dict[UUID, ZPDevice] = {}
         self._availability: dict[UUID, bool] = {}  # device_id -> last signalled availability
-        self._tasks: set[asyncio.Task] = set()
+        self._subscriptions: dict[UUID, list[tuple[zigpy.zcl.Cluster, ZBAttributeUpdatedListener]]] = {}
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._application: ControllerApplication | None = None  # while started
+        self._radio_lock = asyncio.Lock()  # held while the radio opens, and through a reconnect: close, waits, reopens
+        self._reconnecting: asyncio.Task[None] | None = None
+        self._reopens = 0  # tries since the radio last held: drops in a row add up
+        self._opened_at = 0.0  # monotonic, when the radio last opened
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -268,22 +328,40 @@ class ZigBeeController(AbstractController):
     # -------------------------------------------------------------------------
 
     async def start(self):
-        self._zigbee_device_path = self.dependencies.hardware_interfaces[0]
-        self._zigbe_db = str(self.documents_folder / "zigbee.db")
-        log.debug("[START] port=%s  db=%s", self._zigbee_device_path, self._zigbe_db)
+        self._reopens = 0
+        async with self._radio_lock:
+            await self._open()
+
+    async def stop(self):
+        log.debug("[STOP] shutting down")
+        while reconnecting := self._reconnecting:  # the radio it opened may report a loss as it is cancelled
+            self._reconnecting = None
+            reconnecting.cancel()
+            await asyncio.gather(reconnecting, return_exceptions=True)
+        await self._close()
+
+    async def _open(self):
+        """Starts zigpy on the bound radio and takes over the devices on its network."""
+        link = self.peripherals.endpoint("zigbee")
+        tx_power = self.settings.tx_power
+        self._zigbee_device_path = link.url
+        self._zigbe_db = str(self.platform.documents_folder(self) / "zigbee.db")
+        log.debug(f"[START] port={self._zigbee_device_path}  db={self._zigbe_db}")
         config: dict[str, Any] = {
-            CONF_DEVICE: {CONF_DEVICE_PATH: self._zigbee_device_path},
+            CONF_DEVICE: _device_config(link),
             CONF_DATABASE: self._zigbe_db,
+            CONF_NWK: {} if tx_power is None else {CONF_NWK_TX_POWER: tx_power},
         }
 
         # Register per-device quirks before the radio starts interviewing devices.
-        _ensure_quirks_loaded()
+        await _ensure_quirks_loaded()
 
-        # Resolve the radio backend for the attached coordinator (pinned, env, or auto-probed)
-        # and start its zigpy application. Backend-agnostic: no source change to swap dongles.
-        application_cls = await resolve_application(config[CONF_DEVICE], requested=self.radio)
+        # Start the zigpy application of the radio library the bound dialect names.
+        application_cls = application_class(link.dialect)
+        # Kept before it starts the radio: stop() then closes what a failed or cut short start opened
+        self._application = await application_cls.new(config=config, start_radio=False)
         try:
-            self._application = await application_cls.new(config=config, auto_form=True)
+            await self._application.startup(auto_form=True)
         except Exception as e:
             if "locked" in str(e).lower() or "permission" in str(e).lower():
                 holder = port_holder(self._zigbee_device_path)
@@ -293,17 +371,14 @@ class ZigBeeController(AbstractController):
                 raise PermissionError(msg) from e
             raise
         self._application.add_listener(self)
-        log.debug("[READY] connected to %s", self._zigbee_device_path)
+        self._opened_at = time.monotonic()
+        log.debug(f"[READY] connected to {self._zigbee_device_path}")
+        network = self._application.state.network_info
+        self.settings.channel, self.settings.pan_id = int(network.channel), f"0x{int(network.pan_id):04X}"
+        self.settings.extended_pan_id = str(network.extended_pan_id)
 
-        # Optionally cap the coordinator's TX power (e.g. RF-quiet hardware testing). Unset =
-        # radio default (full power, for a real home). The radio clamps to its floor.
-        tx_dbm = os.environ.get("MAJORDOM_ZIGBEE_TX_DBM")
-        if tx_dbm:
-            with contextlib.suppress(Exception):
-                await self._application.set_tx_power(int(tx_dbm))
-                log.info("[RADIO] Zigbee TX power set to %s dBm (clamps to radio min)", tx_dbm)
-
-        async with self.dependencies.make_device_repository() as device_repo:
+        self._availability.clear()  # report every device's availability afresh
+        async with self.platform.device_repository(self) as device_repo:
             # Subscribe to attribute updates and add the device to _connected_devices
             # if the Zigbee device is in the majordom database, otherwise start a discovery cycle.
             for zbdevice in self._application.devices.values():
@@ -312,20 +387,15 @@ class ZigBeeController(AbstractController):
                 device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(zbdevice.ieee))
                 if await device_repo.get(device_id, ZBDevice):
                     self._connected_devices[device_id] = zbdevice
-                    self._availability[device_id] = True  # baseline for mid-session transitions
                     await self._subscribe(device_id, zbdevice)
-                    log.debug("[KNOWN] ieee=%s  nwk=0x%04X", zbdevice.ieee, zbdevice.nwk)
+                    log.debug(f"[KNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X}")
                 else:
                     self._create_task(self._disconnect_unpaired_discovery(device_id, zbdevice.ieee))
                     log.debug(
-                        "[UNKNOWN] ieee=%s  nwk=0x%04X — not in DB, starting disconnect timer",
-                        zbdevice.ieee,
-                        zbdevice.nwk,
+                        f"[UNKNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X} — "
+                        "not in DB, starting disconnect timer"
                     )
-                    try:
-                        await zbdevice.initialize()
-                    except Exception:
-                        log.exception("[UNKNOWN] initialize failed for ieee=%s", zbdevice.ieee)
+                    await zbdevice.initialize()  # never raises: zigpy reports a failure as device_init_failure
 
             # Any device in our DB that isn't on the network anymore is marked unavailable on boot.
             for device in await device_repo.get_all(as_=ZBDevice):
@@ -336,34 +406,47 @@ class ZigBeeController(AbstractController):
                 device.last_error = f"Device {device.name} is no longer connected to the ZigBee network"
                 self._availability[device.id] = False  # baseline for mid-session transitions
                 await device_repo.save(device, device.id)
+        # the Hub marked them unavailable when Zigbee stopped
+        for device_id, zbdevice in list(self._connected_devices.items()):
+            if _is_seen_lately(zbdevice):
+                await self._set_availability(device_id, True)
+            else:
+                self._availability[device_id] = False  # left or died: until its next message
 
-    async def stop(self):
-        log.debug("[STOP] shutting down")
+    async def _close(self):
+        """Lets go of the radio and of what was found on it."""
+        # Let go first: the runtime abandons a stop stuck on a vanished radio, cancelling it inside shutdown()
+        application, self._application = self._application, None
+        if application:
+            application.remove_listener(self)  # its shutdown closes the radio: no connection is lost
         for task in self._tasks:
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-        if self._application:
-            await self._application.shutdown()
         self._majordom_discoveries.clear()
         self._awaiting_zb_discoveries.clear()
         self._connected_devices.clear()
+        self._subscriptions.clear()
+        if application:
+            # Shielded: a stop cancelling the reconnect while it closes a lost radio would leave zigpy's database open,
+            # whose thread then keeps the process from exiting
+            await asyncio.shield(application.shutdown())
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
 
     # -------------------------------------------------------------------------
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
-    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None) -> None:
+    async def start_pairing_window(self, duration_sec: int, credentials: ProvidedCredentials | None = None):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
-        log.debug("[PERMIT-JOIN] opening for %ds", duration_sec)
+            raise self._not_started()
+        log.debug(f"[PERMIT-JOIN] opening for {duration_sec}s")
         await self._application.permit(duration_sec)
 
     async def pair_device(
         self, discovery: Discovery, credentials: ProvidedCredentials | None
     ):  # Break down into submethods
-        async with self.dependencies.make_device_repository() as device_repository:
+        async with self.platform.device_repository(self) as device_repository:
             device = await device_repository.state(discovery.id, ZBDeviceState)
             self._majordom_discoveries.pop(discovery.id)
             zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
@@ -376,7 +459,7 @@ class ZigBeeController(AbstractController):
                 device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
             # Manufacturer-provided, read-only description — the ZCL model string.
             device.description = zbdevice.model or None
-            parameters: list[ZBParameterState] = list()
+            parameters: list[ParameterState[ZBParameterIntegrationData]] = list()
             # v2 QuirkBuilder entity judgment for this device (empty for non-quirked devices).
             quirk_ux = quirk_ux_map(zbdevice)
             for endpoint in zbdevice.non_zdo_endpoints:
@@ -396,7 +479,7 @@ class ZigBeeController(AbstractController):
                         timeout=2,
                     )
                     if self._is_unimplemented(cluster):
-                        log.debug("[PAIR] skipping unimplemented %s", _zb_path(endpoint=endpoint, cluster=cluster))
+                        log.debug(f"[PAIR] skipping unimplemented {_zb_path(endpoint=endpoint, cluster=cluster)}")
                         continue
                     for attribute_id, attribute in cluster.attributes.items():
                         if cluster.is_attribute_unsupported(attribute_id):
@@ -423,11 +506,9 @@ class ZigBeeController(AbstractController):
                         )
                         if source.startswith("fallback"):
                             log.warning(
-                                "[PAIR] uncurated attribute %s -> %s (%s); add to OUR_ATTRIBUTE_UX "
-                                "or refresh the zha harvest",
-                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
-                                visibility.value,
-                                source,
+                                "[PAIR] uncurated attribute "
+                                f"{_zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True)} -> "
+                                f"{visibility.value} ({source}); add to OUR_ATTRIBUTE_UX or refresh the zha harvest"
                             )
 
                         data_type = self._mapper.parse_zigbee_data_type(attribute.zcl_type)
@@ -454,10 +535,10 @@ class ZigBeeController(AbstractController):
                         )
                         for missing_attr in missing_bounds:
                             log.debug(
-                                "[PAIR] metadata source %s not reported for %s — quirk or unsupported; "
-                                "using wire-type default",
-                                _zb_path(cluster=cluster, attr_id=missing_attr, attr_only=True),
-                                _zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True),
+                                "[PAIR] metadata source "
+                                f"{_zb_path(cluster=cluster, attr_id=missing_attr, attr_only=True)} not reported for "
+                                f"{_zb_path(cluster=cluster, attr_id=attribute_id, attr_only=True)} — "
+                                "quirk or unsupported; using wire-type default"
                             )
 
                         if issubclass(attribute.type, Enum) and data_type != ParameterDataType.bool:
@@ -584,19 +665,20 @@ class ZigBeeController(AbstractController):
                 ),
             )
             await device_repository.save(device, discovery.id)
+            await self._subscribe(discovery.id, zbdevice)
             # fetch runs in background; controller_did_connect_device fires after fetch completes
             self._create_task(self._fetch_after_pair(device, zbdevice))
 
     async def unpair(self, device: ZBDevice):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
-        log.debug("[UNPAIR] ieee=%s", device.integration_data.ieee)
+            raise self._not_started()
+        log.debug(f"[UNPAIR] ieee={device.integration_data.ieee}")
         await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         self._connected_devices.pop(self._mapper.device_uuid_from_ieee(device.integration_data.ieee))
 
     async def identify(self, device: ZBDevice):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
@@ -611,9 +693,9 @@ class ZigBeeController(AbstractController):
                 continue
             await cluster.identify(10)  # 10 - identification time
 
-    async def fetch(self, device: ZBDevice) -> None:
+    async def fetch(self, device: ZBDevice):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
@@ -622,7 +704,7 @@ class ZigBeeController(AbstractController):
         if not zbdevice.is_initialized:
             raise ZBUnexpectedError(f"Device {ieee} is not initialized")
         events: list[DeviceParameterChange] = list()
-        log.debug("[FETCH] start device=%s(%s)", device.id, zbdevice.model)
+        log.debug(f"[FETCH] start device={device.id}({zbdevice.model})")
         t0 = asyncio.get_event_loop().time()
         for endpoint in zbdevice.non_zdo_endpoints:
             for cluster_id, cluster in endpoint.in_clusters.items():
@@ -661,14 +743,13 @@ class ZigBeeController(AbstractController):
                         )
                     )
 
-        log.debug(
-            "[FETCH] done device=%s(%s) duration=%.2fs", device.id, zbdevice.model, asyncio.get_event_loop().time() - t0
-        )
-        await self.dependencies.output.controller_did_receive_events(self, events)
+        duration = asyncio.get_event_loop().time() - t0
+        log.debug(f"[FETCH] done device={device.id}({zbdevice.model}) duration={duration:.2f}s")
+        await self.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: ZBDevice, parameter: ZBParameter):
         if not self._application:
-            raise ZBConnectionError("ZigBee application is not started")
+            raise self._not_started()
 
         ieee = self._mapper.convert_str_to_eui64(device.integration_data.ieee)
 
@@ -747,9 +828,43 @@ class ZigBeeController(AbstractController):
     # Device -> Hub: Zigbee network events (zigpy listener) & availability
     # -------------------------------------------------------------------------
 
+    def connection_lost(self, exc: Exception | None):
+        """zigpy lost the radio (the stick re-enumerated, or the service in front of it restarted) and doesn't
+        reconnect by itself: reopen it in place. An unplugged stick stops Zigbee through its lost need instead."""
+        log.warning(f"[RADIO] connection lost: {exc!r}")
+        if self._reconnecting:
+            self._reconnecting.cancel()  # lost again while it reopened: start over
+        self._reconnecting = asyncio.create_task(self._reconnect())
+
+    async def _reconnect(self):
+        async with self._radio_lock:
+            if time.monotonic() - self._opened_at >= self.STABLE_RUN:
+                self._reopens = 0
+            for device_id in list(self._connected_devices):  # unreachable until the radio is back
+                await self._set_availability(device_id, False)
+            lost = list(self._majordom_discoveries)
+            await self._close()
+            for discovery_id in lost:
+                await self.output.controller_did_lose_discovery(self, discovery_id)
+            for delay in self.RECONNECT_DELAYS[self._reopens :]:
+                self._reopens += 1
+                await asyncio.sleep(delay)
+                try:
+                    await self._open()
+                except Exception as e:
+                    log.warning(f"[RADIO] reconnecting failed: {e!r}")
+                    await self._close()
+                else:
+                    log.info("[RADIO] reconnected")
+                    if self._reconnecting is asyncio.current_task():  # unless a loss meanwhile started another
+                        self._reconnecting = None
+                    return
+        error = IntegrationError("radio-lost", "Lost the connection to the Zigbee radio.", is_still_running=False)
+        await self.output.controller_did_encounter_error(self, error)
+
     def device_joined(self, device: ZPDevice):
         """A device joined the Zigbee network (only happens while the permit-join window is open)."""
-        log.debug("[JOIN] ieee=%s  nwk=0x%04X", device.ieee, device.nwk)
+        log.debug(f"[JOIN] ieee={device.ieee}  nwk=0x{device.nwk:04X}")
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
         # Zigbee has no separate "discovery": a device is on the network as soon as it joins.
         # We hold it in the awaiting list and disconnect it if it isn't paired in majordom within
@@ -761,11 +876,8 @@ class ZigBeeController(AbstractController):
         """A device finished interviewing and is ready to talk. Fires both for a brand-new join
         and when an already-paired device rejoins the network after being offline."""
         log.debug(
-            "[INIT] ieee=%s  nwk=0x%04X  model=%r  manufacturer=%r",
-            device.ieee,
-            device.nwk,
-            device.model,
-            device.manufacturer,
+            f"[INIT] ieee={device.ieee}  nwk=0x{device.nwk:04X}  "
+            f"model={device.model!r}  manufacturer={device.manufacturer!r}"
         )
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
 
@@ -779,13 +891,14 @@ class ZigBeeController(AbstractController):
 
         # Awaiting pairing and re-initialized -> just (re)subscribe.
         if device_id in self.discoveries:
+            self._awaiting_zb_discoveries[device_id] = device
             self._create_task(self._subscribe(device_id, device))
             return
 
         # Otherwise it's a new, not-yet-paired device -> surface it as a discovery.
         discovery = Discovery(
             id=device_id,
-            integration=NonEmptyStr(self.name),
+            integration=NonEmptyStr(self.key),
             expected_credentials_options=[CredentialsType.none],
             expiration=None,
             transport=NonEmptyStr("ZIGBEE"),
@@ -796,43 +909,47 @@ class ZigBeeController(AbstractController):
         )
         self._majordom_discoveries[device_id] = discovery
         self._awaiting_zb_discoveries[device_id] = device
-        log.debug("[DISCOVERY] ieee=%s  discovery_id=%s", device.ieee, device_id)
-        self._create_task(self.dependencies.output.controller_did_receive_discovery(self, discovery))
+        log.debug(f"[DISCOVERY] ieee={device.ieee}  discovery_id={device_id}")
+        self._create_task(self.output.controller_did_receive_discovery(self, discovery))
 
     def device_left(self, device: ZPDevice):
         """A device left the Zigbee network. If it's one of ours, mark it unavailable so the app
         reflects it; the pairing stays in the DB so it comes back online on rejoin."""
-        log.debug("[LEFT] ieee=%s  nwk=0x%04X", device.ieee, device.nwk)
+        log.debug(f"[LEFT] ieee={device.ieee}  nwk=0x{device.nwk:04X}")
         device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
         if device_id in self._connected_devices:
             self._create_task(self._set_availability(device_id, False))
 
-    async def _set_availability(self, device_id: UUID, available: bool) -> None:
+    def handle_message(self, device: ZPDevice, *_):
+        """Any message from a device: one held unavailable is back."""
+        device_id = self._mapper.device_uuid_from_ieee(self._mapper.convert_eui64_to_str(device.ieee))
+        if self._availability.get(device_id) is False and device_id in self._connected_devices:
+            self._create_task(self._set_availability(device_id, True))
+
+    async def _set_availability(self, device_id: UUID, available: bool):
         """Single funnel for availability transitions — dedupes so the Hub is only told on an
         actual change, and translates it into the framework's connect / lose callbacks."""
         if self._availability.get(device_id) == available:
             return
         self._availability[device_id] = available
         if available:
-            await self.dependencies.output.controller_did_connect_device(self, device_id)
+            await self.output.controller_did_connect_device(self, device_id)
         else:
-            await self.dependencies.output.controller_did_lose_device(self, device_id)
+            await self.output.controller_did_lose_device(self, device_id)
 
     # -------------------------------------------------------------------------
     # Private helpers
     # -------------------------------------------------------------------------
 
-    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice) -> None:
-        log.debug("[PAIR] starting background fetch device=%s(%s)", device.id, zbdevice.model)
+    async def _fetch_after_pair(self, device: ZBDevice, zbdevice: ZPDevice):
+        log.debug(f"[PAIR] starting background fetch device={device.id}({zbdevice.model})")
         try:
             await self.fetch(device)
         except Exception as e:
-            log.warning(
-                "[PAIR] fetch failed for device=%s(%s), skipping connect signal: %s", device.id, zbdevice.model, e
-            )
+            log.warning(f"[PAIR] fetch failed for device={device.id}({zbdevice.model}), skipping connect signal: {e}")
             return
         await self._set_availability(device.id, True)
-        log.debug("[PAIR] background fetch done, device connected device=%s(%s)", device.id, zbdevice.model)
+        log.debug(f"[PAIR] background fetch done, device connected device={device.id}({zbdevice.model})")
 
     async def _read_cluster_attributes(
         self,
@@ -884,26 +1001,39 @@ class ZigBeeController(AbstractController):
         """Listed in the simple descriptor, but the device reported every attribute unsupported."""
         return bool(cluster.attributes) and not cls._readable_attribute_ids(cluster)
 
-    def _create_task(self, coro) -> asyncio.Task:
+    def _not_started(self) -> ZBConnectionError:
+        if self._reconnecting:
+            return ZBConnectionError("The Zigbee radio is reconnecting")
+        return ZBConnectionError("ZigBee application is not started")
+
+    def _create_task[T](self, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
 
     async def _subscribe(self, device_id: UUID, device: ZPDevice):
+        """Listens to the device's attribute reports, once: a rejoin keeps a plain device's clusters."""
+        for cluster, listener in self._subscriptions.pop(device_id, []):
+            cluster.remove_listener(listener)
+        subscriptions = self._subscriptions[device_id] = []
         for endpoint in device.non_zdo_endpoints:
             for cluster in endpoint.in_clusters.values():
                 listener = ZBAttributeUpdatedListener(self, device_id, cluster)
                 cluster.add_listener(listener)
+                subscriptions.append((cluster, listener))
 
     async def _disconnect_unpaired_discovery(self, discovery_id: UUID, ieee: EUI64):
         await asyncio.sleep(300)  # 5 minutes
         if discovery_id not in self._majordom_discoveries and discovery_id in self._connected_devices:
             # if the device was connected
             return
+        log.info(f"[REMOVE] {ieee} wasn't paired within 5 minutes: removing it from the network")
+        assert self._application  # _close() cancels this task in the same step it lets go of the application
         await self._application.remove(ieee)
-        self._majordom_discoveries.pop(discovery_id)
-        self._awaiting_zb_discoveries.pop(discovery_id)
+        self._awaiting_zb_discoveries.pop(discovery_id, None)
+        if self._majordom_discoveries.pop(discovery_id, None) is not None:
+            await self.output.controller_did_lose_discovery(self, discovery_id)
 
     def _command_field_names(
         self, device_id: UUID, endpoint_id: int, cluster_id: int, zbcommand: ZCLCommandDef

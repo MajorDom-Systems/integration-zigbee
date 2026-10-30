@@ -80,6 +80,14 @@ log = logging.getLogger(__name__)
 # In practice, reading too many attributes at once keeps the serial line busy
 # long enough to trigger NCP ACK timeouts.
 _MAX_ATTRS_PER_REQUEST = 25
+
+
+def _log_task_exception(task: asyncio.Task[Any]):
+    """Retrieves a fire-and-forget task's exception, so asyncio doesn't report it as never retrieved."""
+    if not task.cancelled() and (exc := task.exception()):
+        log.error(f"background task {task.get_coro()!r} failed: {exc!r}", exc_info=exc)
+
+
 # Delay between attribute read chunks to let bellows send ASH ACKs.
 _INTER_CHUNK_DELAY = 0.05
 
@@ -835,6 +843,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         if self._reconnecting:
             self._reconnecting.cancel()  # lost again while it reopened: start over
         self._reconnecting = asyncio.create_task(self._reconnect())
+        self._reconnecting.add_done_callback(_log_task_exception)
 
     async def _reconnect(self):
         async with self._radio_lock:
@@ -972,6 +981,16 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 values, failures = await cluster.read_attributes(
                     cast("list[int | str | ZCLAttributeDef]", chunk), only_cache=only_cache, timeout=timeout
                 )
+            except TimeoutError as e:
+                log_level = log.error if cluster.cluster_id in MAIN_PARAMETER_BY_CLUSTER else log.warning
+                # A listed but unanswered optional cluster (e.g. Metering on a Tuya relay): the
+                # remaining chunks would time out too, so don't wait for each of them.
+                log_level(
+                    f"{log_prefix} read_attributes timeout "
+                    f"{_zb_path(device, zbdevice, endpoint, cluster, attr_ids=chunk, error=e)}"
+                )
+                await asyncio.sleep(_INTER_CHUNK_DELAY)  # let bellows send pending ASH ACKs
+                break
             except Exception as e:
                 log.error(
                     f"{log_prefix} read_attributes error "
@@ -1010,6 +1029,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         task = asyncio.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(_log_task_exception)
         return task
 
     async def _subscribe(self, device_id: UUID, device: ZPDevice):

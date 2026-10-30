@@ -466,6 +466,41 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     )
 
 
+async def test_an_unanswered_optional_cluster_read_is_a_warning_not_an_error(zigbee, monkeypatch, caplog):
+    monkeypatch.setattr(conftest, "MOCK_INPUT_CLUSTERS", _TS0001_INPUT_CLUSTERS)
+    monkeypatch.setattr(conftest, "MOCK_OUTPUT_CLUSTERS", _TS0001_OUTPUT_CLUSTERS)
+    _controller, output, _repository, _app = zigbee
+    metering_reads = 0
+
+    async def read_attributes(cluster: zigpy.zcl.Cluster, attributes: list[int], **kwargs):
+        nonlocal metering_reads
+        if cluster.cluster_id == Metering.cluster_id:
+            metering_reads += 1
+            raise TimeoutError  # the relay never answers Metering
+        return await _ts0001_read_attributes(cluster, attributes, **kwargs)
+
+    with patch.object(zigpy.zcl.Cluster, "read_attributes", new=read_attributes), caplog.at_level("DEBUG"):
+        caplog.clear()
+        await _pair(zigbee)
+        await wait_for(lambda: bool(output.events))
+    timeouts = [r for r in caplog.records if "read_attributes" in r.getMessage() and "Metering" in r.getMessage()]
+    assert timeouts and all(r.levelname == "WARNING" for r in timeouts)
+    assert metering_reads == 2  # one request each for pairing and the fetch, not one per chunk
+
+
+async def test_a_failed_background_task_is_logged_not_left_unretrieved(zigbee, caplog):
+    controller, _output, _repository, _app = zigbee
+
+    async def fail():
+        raise RuntimeError("boom")
+
+    task = controller._create_task(fail())
+    await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0)
+    assert task._log_traceback is False  # retrieved: asyncio won't log "Task exception was never retrieved"
+    assert any("boom" in r.getMessage() and r.levelname == "ERROR" for r in caplog.records)
+
+
 @pytest_asyncio.fixture
 async def running(zigpy_apps, tmp_path, monkeypatch):
     """Zigbee run by the runtime on a pinned radio, which it reopens without waiting."""

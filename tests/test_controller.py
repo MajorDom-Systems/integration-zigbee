@@ -94,8 +94,8 @@ async def test_pairs_a_joined_device(zigbee):
     device = await controller.pair_device(discovery, draft, None)
 
     assert device is draft  # filled in place and returned
-    assert discovery.id not in controller.discoveries
-    assert discovery.id in controller._connected_devices
+    assert discovery.id in controller.discoveries  # until the Hub saves it
+    assert discovery.id not in controller._connected_devices
     assert device.id == discovery.id
     assert device.integration_data.ieee == controller._mapper.convert_eui64_to_str(conftest.MOCK_IEEE)
     assert device.available
@@ -198,29 +198,46 @@ async def test_unpairs_a_device(zigbee):
     assert MOCK_IEEE not in app.devices
 
 
-async def test_unpair_tolerates_a_draft_pairing_never_filled(zigbee):
+async def test_unpair_tolerates_a_record_without_its_node(zigbee):
     controller, output, _repo, app = zigbee
     discovery = await _discover(controller, output)
-    await controller.unpair(_draft(discovery))  # no ieee yet: the failure came before the node was known
+    await controller.unpair(_draft(discovery))  # no ieee
     assert conftest.MOCK_IEEE in app.devices
 
 
-async def test_unpair_rolls_back_a_pairing_that_failed_halfway(zigbee, monkeypatch):
-    controller, output, _repo, app = zigbee
+async def test_a_pairing_that_failed_halfway_is_retried_from_the_same_discovery(zigbee, monkeypatch):
+    controller, output, repository, app = zigbee
     discovery = await _discover(controller, output)
-    draft = _draft(discovery)
 
     async def fail(*_args, **_kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(controller, "_subscribe", fail)
-    with pytest.raises(RuntimeError):
-        await controller.pair_device(discovery, draft, None)
+    with monkeypatch.context() as patched:
+        patched.setattr(controller, "_subscribe", fail)
+        with pytest.raises(RuntimeError):
+            await controller.pair_device(discovery, _draft(discovery), None)
 
-    await controller.unpair(draft)
-    assert conftest.MOCK_IEEE not in app.devices
-    assert discovery.id not in controller._connected_devices
-    assert discovery.id not in controller._subscriptions
+    assert conftest.MOCK_IEEE in app.devices  # nothing undone: it stays joined
+    assert controller.discoveries.keys() == {discovery.id}
+    device = await _pair_as_the_hub(controller, output, repository, controller.discoveries[discovery.id])
+    assert device.parameters and discovery.id in controller._connected_devices
+    assert controller.discoveries == {}
+
+
+async def test_a_pairing_the_hub_never_saved_is_retried_from_the_same_discovery(zigbee):
+    controller, output, repository, app = zigbee
+    discovery = await _discover(controller, output)
+    await controller.pair_device(discovery, _draft(discovery), None)
+    # the Hub refused the id or failed to save: nothing saved, nothing undone
+
+    device = await _pair_as_the_hub(controller, output, repository, controller.discoveries[discovery.id])
+
+    assert device.id == discovery.id and discovery.id in controller._connected_devices
+    assert controller.discoveries == {} and conftest.MOCK_IEEE in app.devices
+    output.events.clear()
+    _flip_the_switch(app)
+    await asyncio.sleep(0.05)
+    assert len(output.events) == 1  # subscribed once
 
 
 async def test_fetch_resubscribes_only_when_the_subscription_is_gone(zigbee, monkeypatch):
@@ -333,7 +350,7 @@ async def test_a_discovery_is_paired_as_zigpy_last_built_it(zigbee):
     discovery = await _discover(controller, output)
     rebuilt = conftest._make_mock_zb_device(app)  # interviewed again, and built anew (as with a quirk)
     controller.device_initialized(rebuilt)
-    await controller.pair_device(discovery, _draft(discovery), None)
+    await _pair_as_the_hub(controller, output, repository, discovery)
     assert controller._connected_devices[discovery.id] is rebuilt
 
 

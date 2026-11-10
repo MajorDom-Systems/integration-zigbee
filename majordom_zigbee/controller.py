@@ -465,12 +465,11 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         # The id is the IEEE-derived discovery id; on a picked record the draft still carries that record's id,
         # which check_device_id needs, so the guard runs before the draft takes the final one.
         await self.check_device_id(discovery.id, device)
-        zbdevice = self._awaiting_zb_discoveries.pop(discovery.id)
-        self._majordom_discoveries.pop(discovery.id)
+        # Still offered until the Hub saves it (it fetches it then): joined, the node needs nothing undone, and a
+        # failed or unsaved pairing is retried from the same discovery (the node leaves after the join timeout)
+        zbdevice = self._awaiting_zb_discoveries[discovery.id]
         device.id = discovery.id
-        # Set at once: a rollback (unpair) of a failure further down finds the node to remove by it
         device.integration_data = ZBDeviceIntegrationData(ieee=self._mapper.convert_eui64_to_str(zbdevice.ieee))
-        self._connected_devices[discovery.id] = zbdevice
         # Manufacturer-provided, read-only description — the ZCL model string.
         device.description = zbdevice.model or None
         parameters: list[ParameterState[ZBParameterIntegrationData]] = list()
@@ -685,11 +684,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
         return device
 
     async def unpair(self, device: ZBDevice):
-        """Also the rollback of a failed pairing, where the draft is whatever pair_device had filled in by then."""
         if not self._application:
             raise self._not_started()
         if not device.integration_data.ieee:
-            return  # pair_device failed before it knew the node: nothing was done to it
+            return  # a record that never got its node
         log.debug(f"[UNPAIR] ieee={device.integration_data.ieee}")
         device_id = self._mapper.device_uuid_from_ieee(device.integration_data.ieee)
         try:
@@ -726,6 +724,10 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
 
         if not (zbdevice := self._application.devices.get(ieee)):
             raise ZBUnexpectedError(f"Device {ieee} not found in ZigBee network")
+        # The Hub saved it (it fetches only then): paired now, no longer offered
+        self._connected_devices[device.id] = zbdevice
+        self._awaiting_zb_discoveries.pop(device.id, None)
+        self._majordom_discoveries.pop(device.id, None)
         if not zbdevice.is_initialized:
             log.debug(f"[FETCH] device={device.id} is still being interviewed, skipping")
             return

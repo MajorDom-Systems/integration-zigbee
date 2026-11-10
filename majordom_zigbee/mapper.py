@@ -13,7 +13,7 @@ from .exceptions import ZBUnexpectedError
 class ZigBeeMapper:
     def __init__(
         self,
-        device_uuid: Callable[[str], UUID],
+        device_uuid: Callable[[bytes], UUID],
         parameter_uuid: Callable[[UUID, str], UUID],
     ):
         # The controller's framework UUID generators (see AbstractController). Every Zigbee
@@ -27,12 +27,8 @@ class ZigBeeMapper:
     # Identity: Zigbee addresses/paths -> MajorDom UUIDs
     # -------------------------------------------------------------------------
 
-    def device_uuid_from_ieee(self, ieee: str | None) -> UUID:
-        # ieee is Optional on the domain model, but a paired Zigbee device always has one; a
-        # missing address here means a corrupt/half-written record, not a normal path.
-        if ieee is None:
-            raise ZBUnexpectedError("Zigbee device is missing its IEEE address")
-        return self._device_uuid(ieee)
+    def device_uuid_from_ieee(self, ieee: EUI64) -> UUID:
+        return self._device_uuid(bytes(ieee.serialize()))
 
     def normalize_zigbee_value(self, value):
         """Coerce zigpy wire values to plain python types for the SDK's typed encoder.
@@ -56,16 +52,16 @@ class ZigBeeMapper:
             return str(value)
         return value
 
-    def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
-        return self._parameter_uuid(device_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
+    def attribute_parameter_uuid(self, physical_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
+        return self._parameter_uuid(physical_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
 
-    def command_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
-        return self._parameter_uuid(device_id, f"command_{endpoint_id}/{cluster_id}/{command_id}")
+    def command_parameter_uuid(self, physical_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
+        return self._parameter_uuid(physical_id, f"command_{endpoint_id}/{cluster_id}/{command_id}")
 
     def command_field_uuid(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_index: int
+        self, physical_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_index: int
     ) -> UUID:
-        return self._parameter_uuid(device_id, f"field_{endpoint_id}/{cluster_id}/{command_id}/{field_index}")
+        return self._parameter_uuid(physical_id, f"field_{endpoint_id}/{cluster_id}/{command_id}/{field_index}")
 
     # -------------------------------------------------------------------------
     # Value / type conversions

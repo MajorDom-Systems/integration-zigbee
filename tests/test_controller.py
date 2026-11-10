@@ -250,7 +250,12 @@ async def test_fetch_of_a_sleeping_device_is_not_a_failure(zigbee, monkeypatch):
         raise TimeoutError
 
     monkeypatch.setattr(zigpy.zcl.Cluster, "read_attributes", asleep)
+    output.events.clear()
     await controller.fetch(device)
+    on_off = controller._mapper.attribute_parameter_uuid(
+        discovery.id, 1, OnOff.cluster_id, OnOff.AttributeDefs.on_off.id
+    )
+    assert on_off not in {event.parameter_id for event in output.events}  # no None over the last known value
 
 
 async def _restart_with_the_device_last_seen(zigbee, monkeypatch, hours_ago: float | None, *, mains: bool = False):

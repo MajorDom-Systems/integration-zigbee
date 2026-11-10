@@ -751,15 +751,15 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                             continue  # pairing exposed no parameters for it
 
                         for attribute_id in cluster.attributes:
-                            if cluster.is_attribute_unsupported(attribute_id):
-                                continue
+                            if cluster.is_attribute_unsupported(attribute_id) or attribute_id not in attr_values:
+                                continue  # unanswered: the device keeps its last known value
                             events.append(
                                 DeviceParameterChange(
                                     device_id=device.id,
                                     parameter_id=self._mapper.attribute_parameter_uuid(
                                         device.id, endpoint.endpoint_id, cluster_id, attribute_id
                                     ),
-                                    value=self._mapper.normalize_zigbee_value(attr_values.get(attribute_id)),
+                                    value=self._mapper.normalize_zigbee_value(attr_values[attribute_id]),
                                 )
                             )
                         for command in cluster.commands:

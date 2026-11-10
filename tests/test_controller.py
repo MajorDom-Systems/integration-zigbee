@@ -62,8 +62,8 @@ async def _discover(controller, output):
 
 def _draft(discovery, **fields) -> ZBDeviceState:
     """What the Hub hands pair_device: the user's form fields, the discovery id."""
-    return ZBDeviceState(
-        **{
+    return ZBDeviceState.model_validate(
+        {
             "id": uuid4(),
             "physical_id": discovery.id,
             "name": "Mock Device",

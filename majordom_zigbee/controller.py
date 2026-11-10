@@ -400,7 +400,7 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
                 if zbdevice.nwk == 0x0000:
                     continue
                 physical_id = self._mapper.device_uuid_from_ieee(zbdevice.ieee)
-                if await device_repo.get(physical_id, ZBDevice):
+                if await device_repo.get(physical_id=physical_id, as_=ZBDevice):
                     self._connected_devices[physical_id] = zbdevice
                     await self._subscribe(physical_id, zbdevice)
                     log.debug(f"[KNOWN] ieee={zbdevice.ieee}  nwk=0x{zbdevice.nwk:04X}")

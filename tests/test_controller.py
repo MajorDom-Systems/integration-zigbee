@@ -113,7 +113,7 @@ async def test_pairing_reports_nothing_about_the_device_and_leaves_the_repositor
     await asyncio.sleep(0.05)  # a background fetch would have reported by now
     assert output.connected_devices == [] and output.events == []
     async with repository.session() as repo:
-        assert await repo.get(discovery.id, as_=ZBDevice) is None
+        assert await repo.get(physical_id=discovery.id, as_=ZBDevice) is None
 
 
 async def test_pairing_a_picked_record_never_changes_its_id(zigbee):
@@ -149,7 +149,7 @@ async def _param(repository, device_id, parameter_id):
     from majordom_zigbee.model import ZBDeviceState, ZBParameter
 
     async with repository.session() as repo:
-        state = await repo.state(device_id, as_=ZBDeviceState)
+        state = await repo.state(physical_id=device_id, as_=ZBDeviceState)
     param = next(p for p in state.parameters if str(p.id) == parameter_id)
     return ZBParameter.model_validate(param.model_dump())
 
@@ -158,7 +158,7 @@ async def _device(repository, device_id):
     from majordom_zigbee.model import ZBDevice
 
     async with repository.session() as repo:
-        return await repo.get(device_id, as_=ZBDevice)
+        return await repo.get(physical_id=device_id, as_=ZBDevice)
 
 
 async def test_sends_a_command_parameter(zigbee):
@@ -560,7 +560,7 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
         await wait_for(lambda: bool(output.events))  # the background fetch after pairing
     device = await _device(repository, discovery.id)
     async with repository.session() as repo:
-        parameters = (await repo.state(discovery.id, as_=ZBDeviceState)).parameters
+        parameters = (await repo.state(physical_id=discovery.id, as_=ZBDeviceState)).parameters
     clusters = {p.integration_data.cluster_id for p in parameters}
 
     # unimplemented clusters expose nothing, client-side (output) clusters have no attributes to read,

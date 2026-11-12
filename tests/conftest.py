@@ -26,15 +26,15 @@ from majordom_integration_sdk.testing import RecordingControllerOutput, build_te
 
 from majordom_zigbee import ZigBeeController
 
-# IEEE 00:11:22:33:44:55:66:77 -> discovery_id 3ad0d5e0-e32d-5b43-ac8f-150aa969c63d
+# IEEE 00:11:22:33:44:55:66:77 -> discovery_id 915c8f1c-444b-5659-a997-7d59b59527d3
 MOCK_IEEE = t.EUI64.convert("00:11:22:33:44:55:66:77")
 MOCK_NWK = t.NWK(0x1234)
 NCP_IEEE = t.EUI64.convert("aa:11:22:bb:33:44:be:ef")
 EXTENDED_PAN_ID = "dd:dd:dd:dd:dd:dd:dd:dd"  # of the network the radio runs, on channel 15 with PAN ID 0x1234
 
-DEVICE_ID = "3ad0d5e0-e32d-5b43-ac8f-150aa969c63d"
-PARAM_COMMAND_ID = "71f0a643-94d1-5def-b4ff-c5a394fafb63"  # toggle command_1/6/2
-PARAM_ATTRIBUTE_ID = "d20e6f38-6ad2-5f51-a7b0-0f812b58e5cd"  # on_time attribute_1/6/16385 (Read|Write)
+DEVICE_ID = "915c8f1c-444b-5659-a997-7d59b59527d3"
+PARAM_COMMAND_ID = "4142c1f6-8696-5acf-a547-e46daf222444"  # toggle command_1/6/2
+PARAM_ATTRIBUTE_ID = "ca4b246f-9f31-52ec-9628-1a6dbac4a989"  # on_time attribute_1/6/16385 (Read|Write)
 MOCK_INPUT_CLUSTERS: list[int] = [6, 8]  # OnOff, LevelControl; tests may monkeypatch it
 MOCK_OUTPUT_CLUSTERS: list[int] = []  # client-side clusters; tests may monkeypatch it
 RADIO = Endpoint("zigbee", "ezsp", "/dev/null")  # pinned backend: no probing of /dev/null

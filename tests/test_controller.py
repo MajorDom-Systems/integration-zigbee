@@ -6,7 +6,7 @@ import time
 from dataclasses import replace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import conftest
 import pytest
@@ -19,7 +19,7 @@ import zigpy.types as t
 import zigpy.zcl
 import zigpy.zdo.types as zdo_t
 from conftest import DEVICE_ID, PARAM_ATTRIBUTE_ID, PARAM_COMMAND_ID, wait_for
-from majordom_integration_sdk import Peripherals
+from majordom_integration_sdk import DeviceIdTakenError, Peripherals
 from majordom_integration_sdk.runtime import PeripheralState, Pinned, Runtime, StatusKind
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.parameter import Parameter, ParameterDataType
@@ -37,7 +37,7 @@ import majordom_zigbee
 from majordom_zigbee import ZigBeeController, ZigpyDriver
 from majordom_zigbee.exceptions import ZBConnectionError
 from majordom_zigbee.listener import ZBAttributeUpdatedListener
-from majordom_zigbee.model import ZBDeviceState, ZBParameter
+from majordom_zigbee.model import ZBDevice, ZBDeviceIntegrationData, ZBDeviceState, ZBParameter
 from majordom_zigbee.zigbee_spec import MAIN_PARAMETER_BY_CLUSTER
 
 _NO_RADIO = patch("bellows.zigbee.application.ControllerApplication.new", side_effect=OSError("no radio"))
@@ -60,50 +60,88 @@ async def _discover(controller, output):
     return output.received_discoveries[-1]
 
 
-async def _seed_provisional(repository, discovery):
-    """The Hub creates the device row before calling pair_device (persistence is the Hub's job)."""
-    from majordom_zigbee.model import ZBDeviceIntegrationData, ZBDeviceState
+def _draft(discovery, **fields) -> ZBDeviceState:
+    """What the Hub hands pair_device: the user's form fields, the discovery id."""
+    return ZBDeviceState.model_validate(
+        {
+            "id": uuid4(),
+            "physical_id": discovery.id,
+            "name": "Mock Device",
+            "room_id": UUID(int=1),
+            "transport": discovery.transport,
+            "integration": "zigbee",
+            "manufacturer": None,
+            "parameters": [],
+            "integration_data": ZBDeviceIntegrationData(),
+            **fields,
+        }
+    )
 
+
+async def _pair_as_the_hub(controller, output, repository, discovery, draft=None) -> ZBDeviceState:
+    """pair_device, then the Hub's part: save, tell the app the device is connected, fetch."""
+    device = await controller.pair_device(discovery, draft or _draft(discovery), None)
     async with repository.session() as repo:
-        await repo.save(
-            ZBDeviceState(
-                id=discovery.id,
-                name="Mock Device",
-                room_id=UUID(int=1),
-                transport=discovery.transport,
-                integration="zigbee",
-                manufacturer=None,
-                parameters=[],
-                integration_data=ZBDeviceIntegrationData(),
-            )
-        )
+        await repo.save(device)
+    if device.available:
+        await output.controller_did_connect_device(controller, physical_id=device.physical_id)
+    await controller.fetch(device)
+    return device
 
 
 async def test_pairs_a_joined_device(zigbee):
     controller, output, repository, _app = zigbee
-    from majordom_zigbee.model import ZBDevice
-
     discovery = await _discover(controller, output)
-    await _seed_provisional(repository, discovery)
+    draft = _draft(discovery, description="kept?")
 
-    await controller.pair_device(discovery, None)
+    device = await controller.pair_device(discovery, draft, None)
 
-    # the discovery is consumed and the device is now tracked as connected
-    assert discovery.id not in controller.discoveries
-    assert discovery.id in controller._connected_devices
-    # persistence: the controller mapped the device's clusters into parameters
+    assert device is draft  # filled in place and returned
+    assert discovery.id in controller.discoveries  # until the Hub saves it
+    assert discovery.id not in controller._connected_devices
+    assert device.physical_id == discovery.id
+    assert device.integration_data.ieee == controller._mapper.convert_eui64_to_str(conftest.MOCK_IEEE)
+    assert device.available
+    assert device.name == "Mock Device" and device.room_id == UUID(int=1)  # the user's fields survive
+    assert len(device.parameters) > 0
+
+
+async def test_pairing_reports_nothing_about_the_device_and_leaves_the_repository_alone(zigbee):
+    controller, output, repository, _app = zigbee
+    discovery = await _discover(controller, output)
+    await controller.pair_device(discovery, _draft(discovery), None)
+    await asyncio.sleep(0.05)  # a background fetch would have reported by now
+    assert output.connected_devices == [] and output.events == []
     async with repository.session() as repo:
-        device = await repo.get(discovery.id, as_=ZBDevice)
-        state = await repo.state(discovery.id)
-    assert device is not None and device.integration_data.ieee
-    assert state is not None and len(state.parameters) > 0
+        assert await repo.get(physical_id=discovery.id, as_=ZBDevice) is None
+
+
+async def test_pairing_a_picked_record_never_changes_its_id(zigbee):
+    controller, output, _repo, _app = zigbee
+    discovery = await _discover(controller, output)
+    picked = _draft(discovery, id=UUID(int=42))  # the record the user picked
+    device = await controller.pair_device(discovery, picked, None)
+    assert device.id == UUID(int=42)
+    assert device.physical_id == discovery.id
+    assert str(device.physical_id) == DEVICE_ID
+
+
+async def test_a_taken_id_stops_pairing_before_the_device_is_touched(zigbee):
+    controller, output, repository, _app = zigbee
+    discovery = await _discover(controller, output)
+    async with repository.session() as repo:
+        await repo.save(_draft(discovery))  # another record holds the id
+    other = _draft(discovery)
+    with pytest.raises(DeviceIdTakenError):
+        await controller.pair_device(discovery, other, None)
+    assert discovery.id in controller.discoveries  # still pairable
+    assert discovery.id not in controller._connected_devices
 
 
 async def _pair(zigbee):
     controller, output, repository, app = zigbee
     discovery = await _discover(controller, output)
-    await _seed_provisional(repository, discovery)
-    await controller.pair_device(discovery, None)
+    await _pair_as_the_hub(controller, output, repository, discovery)
     return discovery
 
 
@@ -111,7 +149,7 @@ async def _param(repository, device_id, parameter_id):
     from majordom_zigbee.model import ZBDeviceState, ZBParameter
 
     async with repository.session() as repo:
-        state = await repo.state(device_id, as_=ZBDeviceState)
+        state = await repo.state(physical_id=device_id, as_=ZBDeviceState)
     param = next(p for p in state.parameters if str(p.id) == parameter_id)
     return ZBParameter.model_validate(param.model_dump())
 
@@ -120,7 +158,7 @@ async def _device(repository, device_id):
     from majordom_zigbee.model import ZBDevice
 
     async with repository.session() as repo:
-        return await repo.get(device_id, as_=ZBDevice)
+        return await repo.get(physical_id=device_id, as_=ZBDevice)
 
 
 async def test_sends_a_command_parameter(zigbee):
@@ -133,7 +171,7 @@ async def test_sends_a_command_parameter(zigbee):
 
     # a ZCL command parameter (toggle) — no exception means the command reached the cluster
     await controller.send_command(
-        DeviceCommand(device_id=discovery.id, parameter_id=UUID(PARAM_COMMAND_ID), value=None), device, parameter
+        DeviceCommand(device_id=device.id, parameter_id=UUID(PARAM_COMMAND_ID), value=None), device, parameter
     )
 
 
@@ -146,7 +184,7 @@ async def test_sends_an_attribute_write(zigbee):
     parameter = await _param(repository, discovery.id, PARAM_ATTRIBUTE_ID)
 
     await controller.send_command(
-        DeviceCommand(device_id=discovery.id, parameter_id=UUID(PARAM_ATTRIBUTE_ID), value=0), device, parameter
+        DeviceCommand(device_id=device.id, parameter_id=UUID(PARAM_ATTRIBUTE_ID), value=0), device, parameter
     )
 
 
@@ -160,6 +198,85 @@ async def test_unpairs_a_device(zigbee):
     from conftest import MOCK_IEEE
 
     assert MOCK_IEEE not in app.devices
+
+
+async def test_unpair_tolerates_a_record_without_its_node(zigbee):
+    controller, output, _repo, app = zigbee
+    discovery = await _discover(controller, output)
+    await controller.unpair(_draft(discovery))  # no ieee
+    assert conftest.MOCK_IEEE in app.devices
+
+
+async def test_a_pairing_that_failed_halfway_is_retried_from_the_same_discovery(zigbee, monkeypatch):
+    controller, output, repository, app = zigbee
+    discovery = await _discover(controller, output)
+
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(controller, "_subscribe", fail)
+        with pytest.raises(RuntimeError):
+            await controller.pair_device(discovery, draft := _draft(discovery), None)
+    await controller.unpair(draft)  # the Hub's rollback
+    await controller.unpair(draft)  # and again: nothing more
+
+    assert conftest.MOCK_IEEE in app.devices  # nothing undone: it stays joined
+    assert controller.discoveries.keys() == {discovery.id}
+    device = await _pair_as_the_hub(controller, output, repository, controller.discoveries[discovery.id])
+    assert device.parameters and discovery.id in controller._connected_devices
+    assert controller.discoveries == {}
+
+
+async def test_a_pairing_the_hub_never_saved_is_retried_from_the_same_discovery(zigbee):
+    controller, output, repository, app = zigbee
+    discovery = await _discover(controller, output)
+    await controller.unpair(await controller.pair_device(discovery, _draft(discovery), None))
+    # the Hub failed to save it, and rolled it back: the node stays joined
+
+    device = await _pair_as_the_hub(controller, output, repository, controller.discoveries[discovery.id])
+
+    assert device.physical_id == discovery.id and discovery.id in controller._connected_devices
+    assert controller.discoveries == {} and conftest.MOCK_IEEE in app.devices
+    output.events.clear()
+    _flip_the_switch(app)
+    await asyncio.sleep(0.05)
+    assert len(output.events) == 1  # subscribed once
+
+
+async def test_fetch_resubscribes_only_when_the_subscription_is_gone(zigbee, monkeypatch):
+    controller, output, repository, app = zigbee
+    discovery = await _pair(zigbee)
+    device = await _device(repository, discovery.id)
+    subscribe = AsyncMock(wraps=controller._subscribe)
+    monkeypatch.setattr(controller, "_subscribe", subscribe)
+
+    await controller.fetch(device)
+    await controller.fetch(device)
+    subscribe.assert_not_awaited()  # nothing lost: no second subscription
+
+    controller._subscriptions.pop(discovery.id)  # as after a rebuilt device
+    await controller.fetch(device)
+    subscribe.assert_awaited_once()
+    await controller.fetch(device)
+    subscribe.assert_awaited_once()
+
+
+async def test_fetch_of_a_sleeping_device_is_not_a_failure(zigbee, monkeypatch):
+    controller, output, repository, _app = zigbee
+    discovery = await _pair(zigbee)
+    device = await _device(repository, discovery.id)
+
+    async def asleep(*_args, **_kwargs):
+        raise TimeoutError
+
+    monkeypatch.setattr(zigpy.zcl.Cluster, "read_attributes", asleep)
+    output.events.clear()
+    await controller.fetch(device)
+    on_off = controller._mapper.attribute_parameter_uuid(
+        discovery.id, 1, OnOff.cluster_id, OnOff.AttributeDefs.on_off.id
+    )
+    assert on_off not in {event.parameter_id for event in output.events}  # no None over the last known value
 
 
 async def _restart_with_the_device_last_seen(zigbee, monkeypatch, hours_ago: float | None, *, mains: bool = False):
@@ -216,7 +333,7 @@ async def test_a_freshly_paired_devices_reports_reach_the_hub(zigbee):
     output.events.clear()
     _flip_the_switch(app)
     await wait_for(lambda: bool(output.events))
-    assert [event.device_id for event in output.events] == [discovery.id]
+    assert [event.physical_id for event in output.events] == [discovery.id]
 
 
 async def test_a_report_reaches_the_hub_once_however_often_the_device_rejoined(zigbee):
@@ -237,8 +354,7 @@ async def test_a_discovery_is_paired_as_zigpy_last_built_it(zigbee):
     discovery = await _discover(controller, output)
     rebuilt = conftest._make_mock_zb_device(app)  # interviewed again, and built anew (as with a quirk)
     controller.device_initialized(rebuilt)
-    await _seed_provisional(repository, discovery)
-    await controller.pair_device(discovery, None)
+    await _pair_as_the_hub(controller, output, repository, discovery)
     assert controller._connected_devices[discovery.id] is rebuilt
 
 
@@ -322,7 +438,7 @@ async def _send_move(zigbee, value_by_field: dict[str, Any]) -> Any:
     command_mock.reset_mock()
 
     await controller.send_command(
-        DeviceCommand(device_id=discovery.id, parameter_id=UUID(param_id), value=value_by_field), device, parameter
+        DeviceCommand(device_id=device.id, parameter_id=UUID(param_id), value=value_by_field), device, parameter
     )
 
     command_mock.assert_awaited_once()
@@ -383,7 +499,7 @@ async def test_main_command_with_arguments_is_a_struct_button(zigbee, monkeypatc
     command_mock = cast(AsyncMock, zigpy.zcl.Cluster.command)
     command_mock.reset_mock()
     await controller.send_command(
-        DeviceCommand(device_id=discovery.id, parameter_id=UUID(param_id), value=cycle[0]), device, main
+        DeviceCommand(device_id=device.id, parameter_id=UUID(param_id), value=cycle[0]), device, main
     )
     call = command_mock.await_args
     assert call is not None and call.args == (command_id,) and call.kwargs == expected
@@ -412,7 +528,7 @@ async def test_attribute_enum_valid_values_map_value_to_label(zigbee, monkeypatc
     write_mock = cast(AsyncMock, zigpy.zcl.Cluster.write_attributes)
     write_mock.reset_mock()
     await controller.send_command(
-        DeviceCommand(device_id=discovery.id, parameter_id=UUID(param_id), value=Fan.FanMode.On.value),
+        DeviceCommand(device_id=device.id, parameter_id=UUID(param_id), value=Fan.FanMode.On.value),
         device,
         fan_mode,
     )
@@ -446,7 +562,7 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
         await wait_for(lambda: bool(output.events))  # the background fetch after pairing
     device = await _device(repository, discovery.id)
     async with repository.session() as repo:
-        parameters = (await repo.state(discovery.id, as_=ZBDeviceState)).parameters
+        parameters = (await repo.state(physical_id=discovery.id, as_=ZBDeviceState)).parameters
     clusters = {p.integration_data.cluster_id for p in parameters}
 
     # unimplemented clusters expose nothing, client-side (output) clusters have no attributes to read,
@@ -462,7 +578,7 @@ async def test_ts0001_exposes_only_supported_clusters(zigbee, monkeypatch):
     assert {on_off_id, toggle_id} <= {str(p.id) for p in parameters}
     toggle = await _param(repository, discovery.id, toggle_id)
     await controller.send_command(
-        DeviceCommand(device_id=discovery.id, parameter_id=UUID(toggle_id), value=None), device, toggle
+        DeviceCommand(device_id=device.id, parameter_id=UUID(toggle_id), value=None), device, toggle
     )
 
 

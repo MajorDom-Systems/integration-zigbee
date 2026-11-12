@@ -217,7 +217,9 @@ async def test_a_pairing_that_failed_halfway_is_retried_from_the_same_discovery(
     with monkeypatch.context() as patched:
         patched.setattr(controller, "_subscribe", fail)
         with pytest.raises(RuntimeError):
-            await controller.pair_device(discovery, _draft(discovery), None)
+            await controller.pair_device(discovery, draft := _draft(discovery), None)
+    await controller.unpair(draft)  # the Hub's rollback
+    await controller.unpair(draft)  # and again: nothing more
 
     assert conftest.MOCK_IEEE in app.devices  # nothing undone: it stays joined
     assert controller.discoveries.keys() == {discovery.id}
@@ -229,8 +231,8 @@ async def test_a_pairing_that_failed_halfway_is_retried_from_the_same_discovery(
 async def test_a_pairing_the_hub_never_saved_is_retried_from_the_same_discovery(zigbee):
     controller, output, repository, app = zigbee
     discovery = await _discover(controller, output)
-    await controller.pair_device(discovery, _draft(discovery), None)
-    # the Hub refused the id or failed to save: nothing saved, nothing undone
+    await controller.unpair(await controller.pair_device(discovery, _draft(discovery), None))
+    # the Hub failed to save it, and rolled it back: the node stays joined
 
     device = await _pair_as_the_hub(controller, output, repository, controller.discoveries[discovery.id])
 

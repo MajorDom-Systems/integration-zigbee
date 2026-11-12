@@ -691,13 +691,17 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             self._mapper.convert_str_to_eui64(device.integration_data.ieee)
         )
         try:
-            await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
+            # Still offered: the Hub's rollback of an unsaved pairing. The joined node needs no undo and stays the
+            # discovery the Hub retries from (the unpaired timer removes it if nobody does)
+            if physical_id not in self._majordom_discoveries:
+                await self._application.remove(self._mapper.convert_str_to_eui64(device.integration_data.ieee))
         finally:
             for cluster, listener in self._subscriptions.pop(physical_id, []):
                 cluster.remove_listener(listener)
             self._connected_devices.pop(physical_id, None)
             self._availability.pop(physical_id, None)
-            self._awaiting_zb_discoveries.pop(physical_id, None)
+            if physical_id not in self._majordom_discoveries:
+                self._awaiting_zb_discoveries.pop(physical_id, None)
 
     async def identify(self, device: ZBDevice):
         if not self._application:

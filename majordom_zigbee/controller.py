@@ -976,9 +976,9 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             return
         self._availability[physical_id] = available
         if available:
-            await self.output.controller_did_connect_device(self, physical_id)
+            await self.output.controller_did_connect_device(self, physical_id=physical_id)
         else:
-            await self.output.controller_did_lose_device(self, physical_id)
+            await self.output.controller_did_lose_device(self, physical_id=physical_id)
 
     # -------------------------------------------------------------------------
     # Private helpers

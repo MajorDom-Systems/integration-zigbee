@@ -84,7 +84,7 @@ async def _pair_as_the_hub(controller, output, repository, discovery, draft=None
     async with repository.session() as repo:
         await repo.save(device)
     if device.available:
-        await output.controller_did_connect_device(controller, device.physical_id)
+        await output.controller_did_connect_device(controller, physical_id=device.physical_id)
     await controller.fetch(device)
     return device
 

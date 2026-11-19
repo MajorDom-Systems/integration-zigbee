@@ -355,6 +355,20 @@ class ZigBeeController(AbstractController[ZBDevice, ZBParameter, "ZigBeeControll
             await asyncio.gather(reconnecting, return_exceptions=True)
         await self._close()
 
+    @override
+    async def settings_did_change(self, before: Settings) -> bool:
+        """A new transmit power is told to the running radio; clearing it needs a restart for the radio's default.
+
+        The network's own fields are read-only: the runtime refuses a change to them.
+        """
+        tx_power = self.settings.tx_power
+        if tx_power == before.tx_power:
+            return True
+        if tx_power is None or self._application is None:
+            return False
+        await self._application.set_tx_power(tx_power)
+        return True
+
     async def _open(self):
         """Starts zigpy on the bound radio and takes over the devices on its network."""
         link = self.peripherals.endpoint("zigbee")

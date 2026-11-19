@@ -80,6 +80,14 @@ class _MockZigpyApp(zigpy.application.ControllerApplication):
     _zb_controller = None  # set to the controller after start()
     given_config: dict[str, Any] | None = None  # what the controller started it with
 
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.tx_powers: list[float] = []  # what the radio was told to transmit with, in order
+
+    async def _set_tx_power(self, tx_power: float):
+        self.tx_powers.append(tx_power)
+        return tx_power
+
     async def send_packet(self, *_):
         pass
 

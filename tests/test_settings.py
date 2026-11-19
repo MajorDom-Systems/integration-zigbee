@@ -1,5 +1,7 @@
 """ZigBeeController.Settings: the user sets only what zigpy accepts; the network's own values are shown, never set."""
 
+from dataclasses import replace
+
 import pytest
 from conftest import EXTENDED_PAN_ID, RADIO, wait_for
 from majordom_integration_sdk import Peripherals
@@ -53,7 +55,33 @@ async def test_a_change_to_the_network_is_refused(zigpy_apps, tmp_path):
             await runtime.update_settings(controller, {"channel": 25})
         shown = controller.settings.model_dump(mode="json")
         await runtime.update_settings(controller, shown | {"tx_power": 4})  # the form sent back with a new power
-        await wait_for(lambda: len(zigpy_apps) == 2 and runtime.status(controller).state == PeripheralState.RUNNING)
         assert controller.settings.channel == 15 and controller.settings.tx_power == 4
+        assert zigpy_apps[0].tx_powers == [4]  # told to the radio that runs, which keeps running
+        assert len(zigpy_apps) == 1 and runtime.status(controller).state == PeripheralState.RUNNING
+    finally:
+        await runtime.stop()
+
+
+async def test_clearing_the_power_restarts_the_radio_for_its_default(zigpy_apps, tmp_path):
+    controller = ZigBeeController(build_test_platform(), settings=ZigBeeController.Settings(tx_power=8))
+    runtime = Runtime(tmp_path, [Pinned(RADIO), controller], platform=controller.platform)
+    await runtime.start()
+    try:
+        await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+        await runtime.update_settings(controller, {"tx_power": None})  # a radio can't be told "the default"
+        await wait_for(lambda: len(zigpy_apps) == 2 and runtime.status(controller).state == PeripheralState.RUNNING)
+        assert zigpy_apps[1].given_config and zigpy_apps[1].given_config[CONF_NWK] == {}
+    finally:
+        await runtime.stop()
+
+
+async def test_the_hosts_facts_need_no_restart(zigpy_apps, tmp_path):
+    controller = ZigBeeController(build_test_platform())
+    runtime = Runtime(tmp_path, [Pinned(RADIO), controller], platform=controller.platform)
+    await runtime.start()
+    try:
+        await wait_for(lambda: runtime.status(controller).state == PeripheralState.RUNNING)
+        await runtime.update_platform(replace(controller.platform, region="Europe", thread_dataset="0e08"))
+        assert len(zigpy_apps) == 1 and runtime.status(controller).state == PeripheralState.RUNNING
     finally:
         await runtime.stop()
